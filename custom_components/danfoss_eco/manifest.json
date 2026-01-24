@@ -1,10 +1,11 @@
 {
   "domain": "danfoss_eco",
   "name": "Danfoss Eco",
-  "documentation": "https://github.com/danfoss-eco/danfoss-eco-ha",
+  "documentation": "https://github.com/danfoss-eco/ha-danfoss-eco",
+  "issue_tracker": "https://github.com/danfoss-eco/ha-danfoss-eco/issues",
   "dependencies": ["bluetooth"],
   "requirements": ["xxtea==3.7.0"],
-  "codeowners": [],
+  "codeowners": ["@danfoss-eco"],
   "config_flow": true,
   "iot_class": "local_polling",
   "version": "0.1.0",
