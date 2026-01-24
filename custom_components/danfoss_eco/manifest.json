@@ -3,7 +3,7 @@
   "name": "Danfoss Eco",
   "bluetooth": [
     {
-      "local_name": "*;eTRV"
+      "local_name": "0:0:*;eTRV"
     }
   ],
   "codeowners": ["@jonbng"],
