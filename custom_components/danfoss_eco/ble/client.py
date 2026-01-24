@@ -7,6 +7,7 @@ from typing import Iterable
 
 from bleak import BleakClient
 from bleak.exc import BleakError
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
@@ -56,9 +57,12 @@ class EtrvBleClient:
         if ble_device is None:
             raise EtrvBleError(f"No connectable device found for {self._address}")
 
-        client = BleakClient(ble_device)
         try:
-            await client.connect()
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self._address,
+            )
         except BleakError as exc:
             raise EtrvBleError(f"Failed to connect to {self._address}") from exc
 
