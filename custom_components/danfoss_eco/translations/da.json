@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Danfoss Eco-opsætning",
+        "description": "Vælg en termostat i nærheden. {scan_hint}",
+        "data": {
+          "address": "MAC-adresse"
+        }
+      },
+      "pair": {
+        "title": "Par enhed",
+        "description": "Tryk og hold termostatknappen nede for at gå i parringsmode, og fortsæt derefter for at hente den hemmelige nøgle."
+      }
+    },
+    "error": {
+      "no_devices": "Ingen Danfoss Eco-enheder fundet.",
+      "pairing_failed": "Kunne ikke hente den hemmelige nøgle. Sørg for, at enheden er i parringsmode og prøv igen.",
+      "not_etrv": "Den fundne enhed er ikke en Danfoss Eco-termostat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Danfoss Eco-indstillinger",
+        "data": {
+          "poll_interval": "Forespørgselsinterval (sekunder)",
+          "stay_connected": "Forbliv tilsluttet mellem forespørgsler",
+          "report_room_temperature": "Rapportér rumtemperatursensor",
+          "setpoint_debounce": "Setpunkt-forsinkelse (sekunder)",
+          "pin": "PIN (standard 0000)"
+        }
+      }
+    }
+  }
+}

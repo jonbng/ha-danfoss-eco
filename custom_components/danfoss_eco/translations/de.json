@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Danfoss Eco-Einrichtung",
+        "description": "Wählen Sie ein Thermostat in der Nähe. {scan_hint}",
+        "data": {
+          "address": "MAC-Adresse"
+        }
+      },
+      "pair": {
+        "title": "Gerät koppeln",
+        "description": "Halten Sie die Thermostat-Taste gedrückt, um den Kopplungsmodus zu starten, und fahren Sie dann fort, um den geheimen Schlüssel abzurufen."
+      }
+    },
+    "error": {
+      "no_devices": "Keine Danfoss Eco-Geräte gefunden.",
+      "pairing_failed": "Geheimer Schlüssel konnte nicht abgerufen werden. Stellen Sie sicher, dass das Gerät im Kopplungsmodus ist, und versuchen Sie es erneut.",
+      "not_etrv": "Gefundenes Gerät ist kein Danfoss Eco-Thermostat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Danfoss Eco-Optionen",
+        "data": {
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "stay_connected": "Zwischen Abfragen verbunden bleiben",
+          "report_room_temperature": "Raumtemperatursensor melden",
+          "setpoint_debounce": "Sollwert-Entprellzeit (Sekunden)",
+          "pin": "PIN (Standard 0000)"
+        }
+      }
+    }
+  }
+}

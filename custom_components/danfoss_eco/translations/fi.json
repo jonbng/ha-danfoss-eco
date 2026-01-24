@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Danfoss Eco -asennus",
+        "description": "Valitse lähellä oleva termostaatti. {scan_hint}",
+        "data": {
+          "address": "MAC-osoite"
+        }
+      },
+      "pair": {
+        "title": "Parita laite",
+        "description": "Pidä termostaatin painiketta painettuna siirtyäksesi paritustilaan ja jatka sitten salaisen avaimen hakemista."
+      }
+    },
+    "error": {
+      "no_devices": "Danfoss Eco -laitteita ei löytynyt.",
+      "pairing_failed": "Salaisen avaimen hakeminen epäonnistui. Varmista, että laite on paritustilassa, ja yritä uudelleen.",
+      "not_etrv": "Löydetty laite ei ole Danfoss Eco -termostaatti."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Danfoss Eco -asetukset",
+        "data": {
+          "poll_interval": "Kyselyväli (sekuntia)",
+          "stay_connected": "Pysy yhteydessä kyselyjen välillä",
+          "report_room_temperature": "Raportoi huonelämpötila-anturi",
+          "setpoint_debounce": "Asetuspisteen viive (sekuntia)",
+          "pin": "PIN (oletus 0000)"
+        }
+      }
+    }
+  }
+}
