@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Danfoss Eco setup",
-        "description": "Select a thermostat that is nearby.",
+        "description": "Select a thermostat that is nearby. ${scan_hint}",
         "data": {
           "address": "Thermostat"
         }

@@ -3,6 +3,9 @@
 This folder contains a custom Home Assistant integration for Danfoss Eco (eTRV) thermostats.
 It connects over BLE, performs the legacy key exchange flow, and exposes a climate entity plus sensors.
 
+### Credits
+Original inspiration and protocol reference from [Keton](https://github.com/keton/etrv2mqtt) and [AdamStrojek](https://github.com/AdamStrojek/libetrv).
+
 ### Features
 - Bluetooth discovery and guided setup flow
 - Key retrieval during pairing (single flow)

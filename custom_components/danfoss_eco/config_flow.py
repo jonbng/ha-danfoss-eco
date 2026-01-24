@@ -33,6 +33,8 @@ _LOGGER = logging.getLogger(__name__)
 
 def _matches_etrv(service_info: bluetooth.BluetoothServiceInfoBleak) -> bool:
     name = service_info.name or ""
+    if not name and hasattr(service_info, "advertisement"):
+        name = service_info.advertisement.local_name or ""
     return name.endswith(";eTRV")
 
 
@@ -76,8 +78,6 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_pair()
 
         devices = await self._async_discovered_devices()
-        if not devices:
-            errors["base"] = "no_devices"
 
         address_selector: Any
         if devices:
@@ -91,6 +91,7 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=data_schema,
             errors=errors,
+            description_placeholders={"scan_hint": "Wait a few seconds for Bluetooth scanning to find the device, or enter the address manually."},
         )
 
     async def async_step_pair(
@@ -142,6 +143,8 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 continue
             address = service_info.address
             name = service_info.name or address
+            if not service_info.name and hasattr(service_info, "advertisement"):
+                name = service_info.advertisement.local_name or address
             devices[address] = f"{name} ({address})"
         return devices
 
