@@ -1,17 +1,17 @@
 {
   "domain": "danfoss_eco",
   "name": "Danfoss Eco",
-  "documentation": "https://github.com/danfoss-eco/ha-danfoss-eco",
-  "issue_tracker": "https://github.com/danfoss-eco/ha-danfoss-eco/issues",
-  "dependencies": ["bluetooth"],
-  "requirements": ["xxtea==3.7.0"],
-  "codeowners": ["@danfoss-eco"],
-  "config_flow": true,
-  "iot_class": "local_polling",
-  "version": "0.1.0",
   "bluetooth": [
     {
       "local_name": "*;eTRV"
     }
-  ]
+  ],
+  "codeowners": ["@jonbng"],
+  "config_flow": true,
+  "documentation": "https://github.com/jonbng/ha-danfoss-eco",
+  "dependencies": ["bluetooth"],
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/jonbng/ha-danfoss-eco/issues",
+  "requirements": ["xxtea==3.7.0"],
+  "version": "0.1.0"
 }
