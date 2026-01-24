@@ -3,9 +3,9 @@
     "step": {
       "user": {
         "title": "Danfoss Eco setup",
-        "description": "Select a thermostat that is nearby. ${scan_hint}",
+        "description": "Select a thermostat that is nearby. {scan_hint}",
         "data": {
-          "address": "Thermostat"
+          "address": "MAC address"
         }
       },
       "pair": {
