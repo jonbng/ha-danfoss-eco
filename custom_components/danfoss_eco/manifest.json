@@ -3,12 +3,12 @@
   "name": "Danfoss Eco",
   "bluetooth": [
     {
-      "local_name": "0:0:*;eTRV"
+      "local_name": "6;0:*;eTRV"
     }
   ],
   "codeowners": ["@jonbng"],
   "config_flow": true,
-  "dependencies": ["bluetooth"],
+  "dependencies": ["bluetooth", "bluetooth_adapters"],
   "documentation": "https://github.com/jonbng/ha-danfoss-eco",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/jonbng/ha-danfoss-eco/issues",

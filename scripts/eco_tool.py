@@ -7,6 +7,8 @@ import argparse
 import asyncio
 import curses
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import xxtea
@@ -96,7 +98,9 @@ async def scan(timeout: float, show_all: bool) -> None:
 async def _get_secret_key_value(address: str, pair: bool) -> str:
     async with BleakClient(address) as client:
         await _maybe_pair(client, pair)
-        data = await client.read_gatt_char(UUID_SECRET_KEY)
+        data = await asyncio.wait_for(
+            client.read_gatt_char(UUID_SECRET_KEY), timeout=10.0
+        )
         return bytes(data)[:16].hex()
 
 
@@ -116,11 +120,17 @@ async def _read_info_data(
         await _maybe_pair(client, pair)
         await _send_pin(client, pin)
 
-        temp_raw = await client.read_gatt_char(UUID_TEMPERATURE)
-        name_raw = await client.read_gatt_char(UUID_NAME)
+        temp_raw = await asyncio.wait_for(
+            client.read_gatt_char(UUID_TEMPERATURE), timeout=10.0
+        )
+        name_raw = await asyncio.wait_for(
+            client.read_gatt_char(UUID_NAME), timeout=10.0
+        )
         battery_raw = None
         if not skip_battery:
-            battery_raw = await client.read_gatt_char(UUID_BATTERY)
+            battery_raw = await asyncio.wait_for(
+                client.read_gatt_char(UUID_BATTERY), timeout=10.0
+            )
 
     temp_decoded = etrv_decode(bytes(temp_raw), key)
     name_decoded = etrv_decode(bytes(name_raw), key)
@@ -165,12 +175,17 @@ async def _set_temperature_value(
     async with BleakClient(address) as client:
         await _maybe_pair(client, pair)
         await _send_pin(client, pin)
-        temp_raw = await client.read_gatt_char(UUID_TEMPERATURE)
+        temp_raw = await asyncio.wait_for(
+            client.read_gatt_char(UUID_TEMPERATURE), timeout=10.0
+        )
         decoded = etrv_decode(bytes(temp_raw), key)
         raw = bytearray(decoded)
         raw[0] = _from_temperature(bounded)
         payload = etrv_encode(bytes(raw), key)
-        await client.write_gatt_char(UUID_TEMPERATURE, payload, response=True)
+        await asyncio.wait_for(
+            client.write_gatt_char(UUID_TEMPERATURE, payload, response=True),
+            timeout=10.0,
+        )
     return bounded
 
 
@@ -189,8 +204,31 @@ async def set_temperature(
     print(f"set_point_updated: {bounded} C")
 
 
+_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
+
 def _run_async(coro):
     return asyncio.run(coro)
+
+
+def _run_async_with_spinner(
+    stdscr, coro, label: str, timeout: float | None = None
+):
+    start = time.monotonic()
+    future = _EXECUTOR.submit(_run_async, coro)
+    spinner = ["|", "/", "-", "\\"]
+    idx = 0
+    stdscr.nodelay(True)
+    while not future.done():
+        if timeout is not None and (time.monotonic() - start) > timeout:
+            stdscr.nodelay(False)
+            raise TimeoutError(f"{label} timed out after {timeout:.0f}s")
+        _message(stdscr, f"{label} {spinner[idx % len(spinner)]}")
+        idx += 1
+        time.sleep(0.1)
+        stdscr.getch()
+    stdscr.nodelay(False)
+    return future.result()
 
 
 def _prompt(stdscr, prompt: str) -> str:
@@ -276,7 +314,12 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
 
         if selected == 0:
             try:
-                secret_key = _run_async(_get_secret_key_value(device.address, True))
+                secret_key = _run_async_with_spinner(
+                    stdscr,
+                    _get_secret_key_value(device.address, True),
+                    "Reading secret key",
+                    timeout=20.0,
+                )
                 state["secret_key"] = secret_key
                 _message(stdscr, "Secret key read and stored.")
             except Exception as exc:
@@ -286,14 +329,17 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
                 _message(stdscr, "Secret key missing. Use 'Read secret key' or set it.")
                 continue
             try:
-                info = _run_async(
+                info = _run_async_with_spinner(
+                    stdscr,
                     _read_info_data(
                         device.address,
                         str(secret),
                         pin if isinstance(pin, int) else None,
                         bool(pair),
                         False,
-                    )
+                    ),
+                    "Reading info",
+                    timeout=20.0,
                 )
                 battery = info["battery"]
                 msg = (
@@ -312,14 +358,17 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
             value = _prompt(stdscr, "Set temperature (C)")
             try:
                 target = float(value)
-                bounded = _run_async(
+                bounded = _run_async_with_spinner(
+                    stdscr,
                     _set_temperature_value(
                         device.address,
                         str(secret),
                         target,
                         pin if isinstance(pin, int) else None,
                         bool(pair),
-                    )
+                    ),
+                    "Setting temperature",
+                    timeout=20.0,
                 )
                 _message(stdscr, f"Setpoint updated to {bounded} C")
             except Exception as exc:
@@ -387,7 +436,12 @@ def _tui_main(stdscr) -> None:
             status = "Scanning..."
             _message(stdscr, status)
             try:
-                devices = _run_async(_scan_devices(8.0, False))
+                devices = _run_async_with_spinner(
+                    stdscr,
+                    _scan_devices(8.0, False),
+                    "Scanning",
+                    timeout=20.0,
+                )
                 selected = 0
                 status = f"Found {len(devices)} device(s)."
             except Exception as exc:
