@@ -21,4 +21,5 @@ Original inspiration and protocol reference from [Keton](https://github.com/keto
 
 ### Notes
 - The device must be in pairing mode to retrieve the secret key.
+- Reads are unlocked by writing the PIN (default `0000`) to the device before polling.
 - BLE access depends on your Home Assistant host Bluetooth setup.

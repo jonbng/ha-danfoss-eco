@@ -21,6 +21,7 @@ from .const import (
     CONF_SECRET_KEY,
     CONF_SETPOINT_DEBOUNCE,
     CONF_STAY_CONNECTED,
+    DEFAULT_PIN,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_REPORT_ROOM_TEMPERATURE,
     DEFAULT_SETPOINT_DEBOUNCE,
@@ -100,36 +101,25 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Connect and exchange keys during setup."""
         errors: dict[str, str] = {}
 
-        if user_input is not None:
-            pin = user_input.get(CONF_PIN)
-            assert self._address is not None
-            try:
-                secret_key = await self._async_get_secret_key(self._address, pin)
-            except EtrvBleError as err:
-                _LOGGER.warning("Pairing failed: %s", err)
-                errors["base"] = "pairing_failed"
-            else:
-                return self.async_create_entry(
-                    title=self._name or self._address,
-                    data={
-                        CONF_ADDRESS: self._address,
-                        CONF_SECRET_KEY: secret_key,
-                        CONF_PIN: pin,
-                    },
-                )
-
-        schema = vol.Schema(
-            {
-                vol.Optional(CONF_PIN): vol.All(
-                    vol.Coerce(int),
-                    vol.Range(min=0, max=9999),
-                )
-            }
-        )
+        assert self._address is not None
+        try:
+            secret_key = await self._async_get_secret_key(self._address, None)
+        except EtrvBleError as err:
+            _LOGGER.warning("Pairing failed: %s", err)
+            errors["base"] = "pairing_failed"
+        else:
+            return self.async_create_entry(
+                title=self._name or self._address,
+                data={
+                    CONF_ADDRESS: self._address,
+                    CONF_SECRET_KEY: secret_key,
+                    CONF_PIN: DEFAULT_PIN,
+                },
+            )
 
         return self.async_show_form(
             step_id="pair",
-            data_schema=schema,
+            data_schema=vol.Schema({}),
             errors=errors,
             description_placeholders={"name": self._name or self._address or ""},
         )
@@ -205,6 +195,10 @@ class DanfossEcoOptionsFlow(config_entries.OptionsFlow):
                         CONF_SETPOINT_DEBOUNCE, DEFAULT_SETPOINT_DEBOUNCE
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1)),
+                vol.Required(
+                    CONF_PIN,
+                    default=options.get(CONF_PIN, self._entry.data.get(CONF_PIN, DEFAULT_PIN)),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=9999)),
             }
         )
 

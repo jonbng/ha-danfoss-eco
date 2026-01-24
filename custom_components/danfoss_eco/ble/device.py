@@ -5,12 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ..const import (
-    HANDLER_BATTERY,
-    HANDLER_NAME,
-    HANDLER_TEMPERATURE,
-    HANDLER_SECRET_KEY,
     MIN_TEMP_C,
     MAX_TEMP_C,
+    UUID_BATTERY,
+    UUID_NAME,
+    UUID_SECRET_KEY,
+    UUID_TEMPERATURE,
 )
 from .client import EtrvBleClient
 from .structs import BatteryData, NameData, TemperatureData
@@ -24,13 +24,13 @@ class EtrvDevice:
 
     async def async_read_state(self) -> dict[str, object]:
         results = await self._client.async_read_many(
-            [HANDLER_BATTERY, HANDLER_TEMPERATURE, HANDLER_NAME],
+            [UUID_BATTERY, UUID_TEMPERATURE, UUID_NAME],
             decode=True,
             send_pin=True,
         )
-        battery = BatteryData.from_bytes(results[HANDLER_BATTERY]).battery
-        temp = TemperatureData.from_bytes(results[HANDLER_TEMPERATURE])
-        name = NameData.from_bytes(results[HANDLER_NAME]).name
+        battery = BatteryData.from_bytes(results[UUID_BATTERY]).battery
+        temp = TemperatureData.from_bytes(results[UUID_TEMPERATURE])
+        name = NameData.from_bytes(results[UUID_NAME]).name
         return {
             "battery": battery,
             "room_temperature": temp.room_temperature,
@@ -43,18 +43,18 @@ class EtrvDevice:
     async def async_set_temperature(self, temperature: float) -> None:
         bounded = max(MIN_TEMP_C, min(MAX_TEMP_C, temperature))
         raw = await self._client.async_read(
-            HANDLER_TEMPERATURE,
+            UUID_TEMPERATURE,
             decode=True,
             send_pin=True,
         )
         temp = TemperatureData.from_bytes(raw)
         payload = temp.with_set_point(bounded)
         await self._client.async_write(
-            HANDLER_TEMPERATURE,
+            UUID_TEMPERATURE,
             payload,
             encode=True,
             send_pin=True,
         )
 
     async def async_get_secret_key(self) -> str:
-        return await self._client.async_get_secret_key(HANDLER_SECRET_KEY)
+        return await self._client.async_get_secret_key(UUID_SECRET_KEY)

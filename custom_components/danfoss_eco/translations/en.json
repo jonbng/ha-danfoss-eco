@@ -10,10 +10,7 @@
       },
       "pair": {
         "title": "Pair device",
-        "description": "Press and hold the thermostat button to enter pairing mode, then continue to retrieve the secret key.",
-        "data": {
-          "pin": "PIN (optional)"
-        }
+        "description": "Press and hold the thermostat button to enter pairing mode, then continue to retrieve the secret key."
       }
     },
     "error": {
@@ -30,7 +27,8 @@
           "poll_interval": "Polling interval (seconds)",
           "stay_connected": "Stay connected between polls",
           "report_room_temperature": "Report room temperature sensor",
-          "setpoint_debounce": "Setpoint debounce (seconds)"
+          "setpoint_debounce": "Setpoint debounce (seconds)",
+          "pin": "PIN (default 0000)"
         }
       }
     }

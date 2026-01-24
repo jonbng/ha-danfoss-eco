@@ -10,7 +10,7 @@ from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from ..const import HANDLER_PIN
+from ..const import UUID_PIN
 from .crypto import etrv_decode, etrv_encode
 
 
@@ -74,19 +74,20 @@ class EtrvBleClient:
         if self._client is None:
             return
         pin_bytes = int(self._pin).to_bytes(4, byteorder="big", signed=False)
-        await self._client.write_gatt_char(HANDLER_PIN, pin_bytes, response=True)
+        await self._client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
+        await asyncio.sleep(0.2)
         self._pin_sent = True
 
     async def async_read(
         self,
-        handler: int,
+        char_uuid: str,
         *,
         decode: bool = True,
         send_pin: bool = True,
     ) -> bytes:
         async with self._lock:
             client = await self._ensure_connected(send_pin=send_pin)
-            data = await client.read_gatt_char(handler)
+            data = await client.read_gatt_char(char_uuid)
             if decode:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for decode")
@@ -97,28 +98,28 @@ class EtrvBleClient:
 
     async def async_read_many(
         self,
-        handlers: Iterable[int],
+        char_uuids: Iterable[str],
         *,
         decode: bool = True,
         send_pin: bool = True,
-    ) -> dict[int, bytes]:
+    ) -> dict[str, bytes]:
         async with self._lock:
             client = await self._ensure_connected(send_pin=send_pin)
-            results: dict[int, bytes] = {}
-            for handler in handlers:
-                data = await client.read_gatt_char(handler)
+            results: dict[str, bytes] = {}
+            for char_uuid in char_uuids:
+                data = await client.read_gatt_char(char_uuid)
                 if decode:
                     if self._secret is None:
                         raise EtrvBleError("Secret key missing for decode")
                     data = etrv_decode(bytes(data), self._secret)
-                results[handler] = bytes(data)
+                results[char_uuid] = bytes(data)
             if not self._stay_connected:
                 await self.async_disconnect()
             return results
 
     async def async_write(
         self,
-        handler: int,
+        char_uuid: str,
         data: bytes,
         *,
         encode: bool = True,
@@ -131,10 +132,10 @@ class EtrvBleClient:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for encode")
                 payload = etrv_encode(data, self._secret)
-            await client.write_gatt_char(handler, payload, response=True)
+            await client.write_gatt_char(char_uuid, payload, response=True)
             if not self._stay_connected:
                 await self.async_disconnect()
 
-    async def async_get_secret_key(self, handler: int) -> str:
-        data = await self.async_read(handler, decode=False, send_pin=False)
+    async def async_get_secret_key(self, char_uuid: str) -> str:
+        data = await self.async_read(char_uuid, decode=False, send_pin=False)
         return data[:16].hex()

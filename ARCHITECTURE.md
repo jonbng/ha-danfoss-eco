@@ -26,12 +26,12 @@ The legacy BLE protocol is re-implemented in `custom_components/danfoss_eco/ble/
 - `client.py` wraps Bleak with HA Bluetooth device discovery and PIN handling.
 - `device.py` provides high-level read/write operations used by the coordinator.
 
-Key handlers (legacy-compatible):
-- Battery: `0x10`
-- PIN write: `0x24`
-- Temperature: `0x2D`
-- Name: `0x30`
-- Secret key (pairing mode): `0x3F`
+BLE UUIDs used (verified on device):
+- Secret key (pairing mode): `1002000b-2749-0001-0000-00805f9b042f`
+- PIN write (unlock reads): `10020001-2749-0001-0000-00805f9b042f`
+- Temperature: `10020002-2749-0001-0000-00805f9b042f`
+- Name: `10020003-2749-0001-0000-00805f9b042f`
+- Battery: `00002a19-0000-1000-8000-00805f9b34fb`
 
 ### Setup Flow
 `config_flow.py` provides:

@@ -19,6 +19,7 @@ from .const import (
     CONF_SECRET_KEY,
     CONF_SETPOINT_DEBOUNCE,
     CONF_STAY_CONNECTED,
+    DEFAULT_PIN,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_SETPOINT_DEBOUNCE,
     DEFAULT_STAY_CONNECTED,
@@ -47,7 +48,7 @@ class EtrvCoordinator(DataUpdateCoordinator[dict[str, object]]):
             hass,
             entry.unique_id or entry.data["address"],
             entry.data.get(CONF_SECRET_KEY),
-            entry.data.get(CONF_PIN),
+            options.get(CONF_PIN, entry.data.get(CONF_PIN, DEFAULT_PIN)),
             options.get(CONF_STAY_CONNECTED, DEFAULT_STAY_CONNECTED),
         )
         self._device = EtrvDevice(self._client)
