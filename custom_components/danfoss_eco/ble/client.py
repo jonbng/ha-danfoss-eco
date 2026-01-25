@@ -141,5 +141,5 @@ class EtrvBleClient:
                 await self.async_disconnect()
 
     async def async_get_secret_key(self, char_uuid: str) -> str:
-        data = await self.async_read(char_uuid, decode=False, send_pin=False)
+        data = await self.async_read(char_uuid, decode=False, send_pin=True)
         return data[:16].hex()
