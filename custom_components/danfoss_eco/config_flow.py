@@ -99,27 +99,35 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Connect and exchange keys during setup."""
+        """Connect and exchange keys during setup.
+
+        Shows a form first, then attempts pairing when the user submits.
+        This prevents the flow from getting stuck in "in_progress" state
+        if the BLE connection hangs.
+        """
         errors: dict[str, str] = {}
 
         assert self._address is not None
-        try:
-            secret_key = await self._async_get_secret_key(self._address, None)
-        except EtrvBleTimeoutError as err:
-            _LOGGER.warning("Pairing timed out: %s", err)
-            errors["base"] = "timeout_connect"
-        except EtrvBleError as err:
-            _LOGGER.warning("Pairing failed: %s", err)
-            errors["base"] = "cannot_connect"
-        else:
-            return self.async_create_entry(
-                title=self._name or self._address,
-                data={
-                    CONF_ADDRESS: self._address,
-                    CONF_SECRET_KEY: secret_key,
-                    CONF_PIN: DEFAULT_PIN,
-                },
-            )
+
+        # Only attempt pairing when user submits the form (user_input is not None)
+        if user_input is not None:
+            try:
+                secret_key = await self._async_get_secret_key(self._address, None)
+            except EtrvBleTimeoutError as err:
+                _LOGGER.warning("Pairing timed out: %s", err)
+                errors["base"] = "timeout_connect"
+            except EtrvBleError as err:
+                _LOGGER.warning("Pairing failed: %s", err)
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_create_entry(
+                    title=self._name or self._address,
+                    data={
+                        CONF_ADDRESS: self._address,
+                        CONF_SECRET_KEY: secret_key,
+                        CONF_PIN: DEFAULT_PIN,
+                    },
+                )
 
         return self.async_show_form(
             step_id="pair",
