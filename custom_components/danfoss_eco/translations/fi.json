@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Parita laite",
-        "description": "Pidä termostaatin painiketta painettuna siirtyäksesi paritustilaan ja jatka sitten salaisen avaimen hakemista."
+        "description": "Paina termostaatin painiketta kerran siirtyäksesi paritustilaan ja napsauta sitten Lähetä hakeaksesi salaisen avaimen."
       }
     },
     "error": {

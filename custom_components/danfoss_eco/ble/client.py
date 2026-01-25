@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Iterable
 
 from bleak import BleakClient
@@ -16,9 +17,10 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from ..const import UUID_PIN
-from .crypto import etrv_decode, etrv_encode
+from .crypto import EtrvDecodeError, etrv_decode, etrv_encode
 
-# Default timeout for BLE connection attempts (seconds)
+_LOGGER = logging.getLogger(__name__)
+
 DEFAULT_CONNECT_TIMEOUT = 15.0
 
 
@@ -107,9 +109,20 @@ class EtrvBleClient:
         if self._client is None:
             return
         pin_bytes = int(self._pin).to_bytes(4, byteorder="big", signed=False)
-        await self._client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
-        await asyncio.sleep(0.2)
+        _LOGGER.debug(
+            "Sending PIN %s to %s (bytes: %s)",
+            self._pin,
+            self._address,
+            pin_bytes.hex(),
+        )
+        try:
+            await self._client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
+        except BleakError as exc:
+            _LOGGER.error("Failed to write PIN to %s: %s", self._address, exc)
+            raise EtrvBleError(f"Failed to send PIN: {exc}") from exc
+        await asyncio.sleep(0.5)
         self._pin_sent = True
+        _LOGGER.debug("PIN sent successfully to %s", self._address)
 
     async def async_read(
         self,
@@ -125,7 +138,10 @@ class EtrvBleClient:
             if decode:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for decode")
-                data = etrv_decode(bytes(data), self._secret)
+                try:
+                    data = etrv_decode(bytes(data), self._secret)
+                except EtrvDecodeError as exc:
+                    raise EtrvBleError(str(exc)) from exc
             if not self._stay_connected:
                 await self.async_disconnect()
             return bytes(data)
@@ -145,7 +161,10 @@ class EtrvBleClient:
                 if decode:
                     if self._secret is None:
                         raise EtrvBleError("Secret key missing for decode")
-                    data = etrv_decode(bytes(data), self._secret)
+                    try:
+                        data = etrv_decode(bytes(data), self._secret)
+                    except EtrvDecodeError as exc:
+                        raise EtrvBleError(str(exc)) from exc
                 results[char_uuid] = bytes(data)
             if not self._stay_connected:
                 await self.async_disconnect()

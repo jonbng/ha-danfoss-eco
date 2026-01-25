@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Gerät koppeln",
-        "description": "Halten Sie die Thermostat-Taste gedrückt, um den Kopplungsmodus zu starten, und fahren Sie dann fort, um den geheimen Schlüssel abzurufen."
+        "description": "Drücken Sie einmal die Thermostat-Taste, um den Kopplungsmodus zu starten, und klicken Sie dann auf Absenden, um den geheimen Schlüssel abzurufen."
       }
     },
     "error": {

@@ -63,6 +63,7 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._address = address
         self._name = discovery_info.name or address
         self.context["title_placeholders"] = {"name": self._name}
+        # Show the pair form instead of immediately attempting connection
         return await self.async_step_pair()
 
     async def async_step_user(

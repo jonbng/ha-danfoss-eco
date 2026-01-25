@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Pair device",
-        "description": "Press and hold the thermostat button to enter pairing mode, then continue to retrieve the secret key."
+        "description": "Press the thermostat button once to enter pairing mode, then click Submit to retrieve the secret key."
       }
     },
     "error": {
