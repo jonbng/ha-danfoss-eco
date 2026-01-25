@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 
+from .ble import close_stale_connections_by_address
 from .const import DOMAIN
 from .coordinator import EtrvCoordinator
 
@@ -14,6 +15,13 @@ PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Danfoss Eco from a config entry."""
+    address = entry.unique_id or entry.data.get(CONF_ADDRESS, "")
+
+    # Clear any stale BLE connections before attempting to connect.
+    # This prevents "already_in_progress" errors from lingering connections.
+    if address:
+        await close_stale_connections_by_address(address)
+
     coordinator = EtrvCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 

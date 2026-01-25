@@ -16,7 +16,13 @@
     "error": {
       "no_devices": "Ingen Danfoss Eco-enheder fundet.",
       "pairing_failed": "Kunne ikke hente den hemmelige nøgle. Sørg for, at enheden er i parringsmode og prøv igen.",
-      "not_etrv": "Den fundne enhed er ikke en Danfoss Eco-termostat."
+      "not_etrv": "Den fundne enhed er ikke en Danfoss Eco-termostat.",
+      "timeout_connect": "Forbindelsen udløb. Sørg for, at enheden er i parringsmode og inden for rækkevidde, og prøv igen.",
+      "cannot_connect": "Kunne ikke oprette forbindelse til enheden. Sørg for, at enheden er i parringsmode og prøv igen."
+    },
+    "abort": {
+      "already_configured": "Enheden er allerede konfigureret.",
+      "already_in_progress": "Konfigurationen er allerede i gang. Hvis en tidligere opsætning mislykkedes, genstart Home Assistant og prøv igen."
     }
   },
   "options": {

@@ -16,7 +16,13 @@
     "error": {
       "no_devices": "Danfoss Eco -laitteita ei löytynyt.",
       "pairing_failed": "Salaisen avaimen hakeminen epäonnistui. Varmista, että laite on paritustilassa, ja yritä uudelleen.",
-      "not_etrv": "Löydetty laite ei ole Danfoss Eco -termostaatti."
+      "not_etrv": "Löydetty laite ei ole Danfoss Eco -termostaatti.",
+      "timeout_connect": "Yhteys aikakatkaistiin. Varmista, että laite on paritustilassa ja kantaman sisällä, ja yritä uudelleen.",
+      "cannot_connect": "Laitteeseen ei saatu yhteyttä. Varmista, että laite on paritustilassa, ja yritä uudelleen."
+    },
+    "abort": {
+      "already_configured": "Laite on jo määritetty.",
+      "already_in_progress": "Määritys on jo käynnissä. Jos edellinen asennus epäonnistui, käynnistä Home Assistant uudelleen ja yritä uudelleen."
     }
   },
   "options": {

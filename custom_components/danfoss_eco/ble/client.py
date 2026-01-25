@@ -7,16 +7,27 @@ from typing import Iterable
 
 from bleak import BleakClient
 from bleak.exc import BleakError
-from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    close_stale_connections_by_address,
+    establish_connection,
+)
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from ..const import UUID_PIN
 from .crypto import etrv_decode, etrv_encode
 
+# Default timeout for BLE connection attempts (seconds)
+DEFAULT_CONNECT_TIMEOUT = 15.0
+
 
 class EtrvBleError(Exception):
     """Error communicating with the device."""
+
+
+class EtrvBleTimeoutError(EtrvBleError):
+    """Timeout connecting to the device."""
 
 
 class EtrvBleClient:
@@ -45,11 +56,17 @@ class EtrvBleClient:
         self._client = None
         self._pin_sent = False
 
-    async def _ensure_connected(self, send_pin: bool) -> BleakClient:
+    async def _ensure_connected(
+        self, send_pin: bool, timeout: float | None = None
+    ) -> BleakClient:
         if self._client and self._client.is_connected:
             if send_pin:
                 await self._send_pin_once()
             return self._client
+
+        # Clear any stale connections to this address before attempting to connect.
+        # This prevents "already_in_progress" errors from lingering connection attempts.
+        await close_stale_connections_by_address(self._address)
 
         ble_device = bluetooth.async_ble_device_from_address(
             self._hass, self._address, connectable=True
@@ -58,11 +75,23 @@ class EtrvBleClient:
             raise EtrvBleError(f"No connectable device found for {self._address}")
 
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                self._address,
-            )
+            if timeout is not None:
+                async with asyncio.timeout(timeout):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        ble_device,
+                        self._address,
+                    )
+            else:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    self._address,
+                )
+        except TimeoutError as exc:
+            raise EtrvBleTimeoutError(
+                f"Timeout connecting to {self._address}"
+            ) from exc
         except BleakError as exc:
             raise EtrvBleError(f"Failed to connect to {self._address}") from exc
 
@@ -88,9 +117,10 @@ class EtrvBleClient:
         *,
         decode: bool = True,
         send_pin: bool = True,
+        timeout: float | None = None,
     ) -> bytes:
         async with self._lock:
-            client = await self._ensure_connected(send_pin=send_pin)
+            client = await self._ensure_connected(send_pin=send_pin, timeout=timeout)
             data = await client.read_gatt_char(char_uuid)
             if decode:
                 if self._secret is None:
@@ -140,6 +170,23 @@ class EtrvBleClient:
             if not self._stay_connected:
                 await self.async_disconnect()
 
-    async def async_get_secret_key(self, char_uuid: str) -> str:
-        data = await self.async_read(char_uuid, decode=False, send_pin=True)
+    async def async_get_secret_key(
+        self, char_uuid: str, timeout: float | None = DEFAULT_CONNECT_TIMEOUT
+    ) -> str:
+        """Read the secret key from the device.
+
+        Args:
+            char_uuid: UUID of the secret key characteristic.
+            timeout: Connection timeout in seconds. Defaults to DEFAULT_CONNECT_TIMEOUT.
+
+        Returns:
+            The secret key as a hex string.
+
+        Raises:
+            EtrvBleTimeoutError: If the connection times out.
+            EtrvBleError: If the connection fails for other reasons.
+        """
+        data = await self.async_read(
+            char_uuid, decode=False, send_pin=True, timeout=timeout
+        )
         return data[:16].hex()

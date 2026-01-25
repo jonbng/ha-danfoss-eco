@@ -16,7 +16,13 @@
     "error": {
       "no_devices": "Keine Danfoss Eco-Geräte gefunden.",
       "pairing_failed": "Geheimer Schlüssel konnte nicht abgerufen werden. Stellen Sie sicher, dass das Gerät im Kopplungsmodus ist, und versuchen Sie es erneut.",
-      "not_etrv": "Gefundenes Gerät ist kein Danfoss Eco-Thermostat."
+      "not_etrv": "Gefundenes Gerät ist kein Danfoss Eco-Thermostat.",
+      "timeout_connect": "Verbindung wurde zeitüberschritten. Stellen Sie sicher, dass das Gerät im Kopplungsmodus und in Reichweite ist, und versuchen Sie es erneut.",
+      "cannot_connect": "Verbindung zum Gerät konnte nicht hergestellt werden. Stellen Sie sicher, dass das Gerät im Kopplungsmodus ist, und versuchen Sie es erneut."
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert.",
+      "already_in_progress": "Konfiguration läuft bereits. Falls eine vorherige Einrichtung fehlgeschlagen ist, starten Sie Home Assistant neu und versuchen Sie es erneut."
     }
   },
   "options": {

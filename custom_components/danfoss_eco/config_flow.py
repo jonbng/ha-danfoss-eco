@@ -12,7 +12,8 @@ from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
 
-from .ble.client import EtrvBleClient, EtrvBleError
+from .ble import close_stale_connections_by_address
+from .ble.client import EtrvBleClient, EtrvBleError, EtrvBleTimeoutError
 from .ble.device import EtrvDevice
 from .const import (
     CONF_PIN,
@@ -104,9 +105,12 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         assert self._address is not None
         try:
             secret_key = await self._async_get_secret_key(self._address, None)
+        except EtrvBleTimeoutError as err:
+            _LOGGER.warning("Pairing timed out: %s", err)
+            errors["base"] = "timeout_connect"
         except EtrvBleError as err:
             _LOGGER.warning("Pairing failed: %s", err)
-            errors["base"] = "pairing_failed"
+            errors["base"] = "cannot_connect"
         else:
             return self.async_create_entry(
                 title=self._name or self._address,
@@ -139,6 +143,10 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return devices
 
     async def _async_get_secret_key(self, address: str, pin: int | None) -> str:
+        # Clear any stale connections before attempting pairing.
+        # This prevents "already_in_progress" errors from previous failed attempts.
+        await close_stale_connections_by_address(address)
+
         client = EtrvBleClient(
             self.hass,
             address,

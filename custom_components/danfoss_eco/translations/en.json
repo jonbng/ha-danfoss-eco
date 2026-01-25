@@ -16,7 +16,13 @@
     "error": {
       "no_devices": "No Danfoss Eco devices found.",
       "pairing_failed": "Failed to retrieve the secret key. Ensure the device is in pairing mode and try again.",
-      "not_etrv": "Discovered device is not a Danfoss Eco thermostat."
+      "not_etrv": "Discovered device is not a Danfoss Eco thermostat.",
+      "timeout_connect": "Connection timed out. Ensure the device is in pairing mode and within range, then try again.",
+      "cannot_connect": "Could not connect to the device. Ensure the device is in pairing mode and try again."
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "already_in_progress": "Configuration is already in progress. If a previous setup failed, restart Home Assistant and try again."
     }
   },
   "options": {
