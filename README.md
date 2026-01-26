@@ -19,7 +19,18 @@ Original inspiration and protocol reference from [Keton](https://github.com/keto
 3. Go to **Settings → Devices & Services → Add Integration** and search for **Danfoss Eco**.
 4. Follow the setup flow, and press/hold the thermostat button when prompted.
 
+### Important: Connection Timing
+
+The Danfoss Eco eTRV has **unusually slow BLE communication**:
+
+- **Initial connection**: ~27 seconds
+- **GATT service discovery**: ~30 seconds  
+- **Total time per operation**: Up to 60-90 seconds
+
+This is normal behavior for this device. The integration uses a 90-second connection timeout to accommodate this. During setup and polling, expect significant wait times—this is not a bug.
+
 ### Notes
-- The device must be in pairing mode to retrieve the secret key.
+- The device must be in pairing mode to retrieve the secret key (press and hold the timer button until the display shows the pairing icon).
 - Reads are unlocked by writing the PIN (default `0000`) to the device before polling.
 - BLE access depends on your Home Assistant host Bluetooth setup.
+- Due to the slow connection times, frequent polling is not recommended. The default poll interval is 1 hour.

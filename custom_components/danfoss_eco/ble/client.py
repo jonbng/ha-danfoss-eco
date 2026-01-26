@@ -21,7 +21,7 @@ from .crypto import EtrvDecodeError, etrv_decode, etrv_encode
 
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_CONNECT_TIMEOUT = 15.0
+DEFAULT_CONNECT_TIMEOUT = 90.0
 
 
 class EtrvBleError(Exception):

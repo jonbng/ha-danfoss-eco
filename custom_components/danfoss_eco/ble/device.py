@@ -23,12 +23,21 @@ class EtrvDevice:
         self._client = client
 
     async def async_read_state(self) -> dict[str, object]:
+        # Battery is standard BLE characteristic (0x2A19) - NOT XXTEA encrypted
+        # Must read it separately with decode=False
+        battery_raw = await self._client.async_read(
+            UUID_BATTERY,
+            decode=False,
+            send_pin=False,  # Battery doesn't require PIN
+        )
+        battery = BatteryData.from_bytes(battery_raw).battery
+
+        # Temperature and Name are Danfoss custom characteristics - XXTEA encrypted
         results = await self._client.async_read_many(
-            [UUID_BATTERY, UUID_TEMPERATURE, UUID_NAME],
+            [UUID_TEMPERATURE, UUID_NAME],
             decode=True,
             send_pin=True,
         )
-        battery = BatteryData.from_bytes(results[UUID_BATTERY]).battery
         temp = TemperatureData.from_bytes(results[UUID_TEMPERATURE])
         name = NameData.from_bytes(results[UUID_NAME]).name
         return {

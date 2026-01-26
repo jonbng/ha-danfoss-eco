@@ -6,23 +6,50 @@ from __future__ import annotations
 import argparse
 import asyncio
 import curses
+import logging
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import xxtea
 from bleak import BleakClient, BleakScanner
 
+if TYPE_CHECKING:
+    from bleak.backends.bluezdbus.client import BleakClientBlueZDBus
+
+logger = logging.getLogger(__name__)
+
+# BLE UUIDs for Danfoss Eco eTRV
+# Reference: libetrv, Eco2 (C#), DanfossE2.py3
 UUID_BATTERY = "00002a19-0000-1000-8000-00805f9b34fb"
 UUID_PIN = "10020001-2749-0001-0000-00805f9b042f"
-UUID_TEMPERATURE = "10020002-2749-0001-0000-00805f9b042f"
-UUID_NAME = "10020003-2749-0001-0000-00805f9b042f"
+UUID_TEMPERATURE = "10020005-2749-0001-0000-00805f9b042f"  # Set point + room temp
+UUID_SETTINGS = "10020003-2749-0001-0000-00805f9b042f"  # Device settings
+UUID_NAME = "10020006-2749-0001-0000-00805f9b042f"  # Device name
 UUID_SECRET_KEY = "1002000b-2749-0001-0000-00805f9b042f"
+
+# Handle map (from libetrv) - allows bypassing service discovery
+# These are ATT handles used by bluepy's readCharacteristic/writeCharacteristic
+HANDLE_PIN = 0x24  # PIN characteristic (write handle, value handle is 0x23)
+HANDLE_SECRET_KEY = 0x3f  # Secret key characteristic
+HANDLE_TEMPERATURE = 0x2d  # Temperature characteristic
+HANDLE_NAME = 0x30  # Name characteristic
+HANDLE_SETTINGS = 0x2a  # Settings characteristic
+HANDLE_BATTERY = 0x10  # Battery characteristic
+
+# Service UUID for Danfoss custom service
+UUID_DANFOSS_SERVICE = "10020000-2749-0001-0000-00805f9b042f"
+
+# Advertisement flag for pairing mode (from libetrv)
+# If bit 2 (0x4) is set in the first byte of the device name, device is in setup mode
+PAIRING_MODE_FLAG = 0x4
 
 MIN_TEMP_C = 10.0
 MAX_TEMP_C = 40.0
 TEMP_STEP = 0.5
+POLL_INTERVAL_SECS = 30
 
 
 def _is_etrv(name: str | None) -> bool:
@@ -60,14 +87,7 @@ def _from_temperature(value: float) -> int:
     return int(round(value / TEMP_STEP))
 
 
-async def _maybe_pair(client: BleakClient, pair: bool) -> None:
-    if pair and hasattr(client, "pair"):
-        await client.pair()
-
-
-async def _send_pin(client: BleakClient, pin: int | None) -> None:
-    if pin is None:
-        return
+async def _send_pin(client: BleakClient, pin: int) -> None:
     pin_bytes = int(pin).to_bytes(4, byteorder="big", signed=False)
     await client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
     await asyncio.sleep(0.2)
@@ -77,6 +97,22 @@ async def _send_pin(client: BleakClient, pin: int | None) -> None:
 class ScannedDevice:
     address: str
     name: str | None
+    in_pairing_mode: bool = False
+
+
+def _parse_pairing_mode(name: str | None) -> bool:
+    """Check if device is in pairing mode based on advertisement flags.
+    
+    The advertisement data format is: [Flags][MAC addr][Device type]
+    If bit 2 (0x4) of Flags is set, device is in setup/pairing mode.
+    """
+    if not name or not name.endswith(";eTRV"):
+        return False
+    try:
+        flags = ord(name[0])
+        return bool(flags & PAIRING_MODE_FLAG)
+    except (IndexError, TypeError):
+        return False
 
 
 async def _scan_devices(timeout: float, show_all: bool) -> list[ScannedDevice]:
@@ -85,39 +121,78 @@ async def _scan_devices(timeout: float, show_all: bool) -> list[ScannedDevice]:
     for device in devices:
         name = device.name or getattr(device, "local_name", None)
         if show_all or _is_etrv(name):
-            found.append(ScannedDevice(device.address, name))
+            in_pairing_mode = _parse_pairing_mode(name)
+            found.append(ScannedDevice(device.address, name, in_pairing_mode))
     return found
 
 
 async def scan(timeout: float, show_all: bool) -> None:
     devices = await _scan_devices(timeout, show_all)
     for device in devices:
-        print(f"{device.address} | {device.name}")
+        mode = " [PAIRING]" if device.in_pairing_mode else ""
+        print(f"{device.address} | {device.name}{mode}")
 
 
-async def _get_secret_key_value(address: str, pair: bool) -> str:
-    async with BleakClient(address) as client:
-        await _maybe_pair(client, pair)
-        data = await asyncio.wait_for(
-            client.read_gatt_char(UUID_SECRET_KEY), timeout=10.0
-        )
+async def _get_secret_key_value(address: str, pin: int = 0) -> str:
+    """Read secret key from device. Device must be in pairing mode (timer button pressed)."""
+    logger.debug("Connecting to %s", address)
+    
+    # Use longer timeout (90s) since this device takes ~27s just to connect,
+    # plus additional time for service discovery
+    client = BleakClient(address, timeout=90.0)
+    try:
+        logger.debug("Attempting connection with dangerous_use_bleak_cache=True")
+        await client.connect(dangerous_use_bleak_cache=True)
+        logger.debug("Connected to %s", address)
+        
+        logger.debug("Services: %s", [str(s.uuid) for s in client.services])
+        
+        logger.debug("Writing PIN to %s", address)
+        pin_bytes = int(pin).to_bytes(4, byteorder="big", signed=False)
+        await client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
+        logger.debug("PIN written to %s", address)
+        await asyncio.sleep(0.2)
+        
+        logger.debug("Reading secret key from %s", address)
+        try:
+            data = await asyncio.wait_for(
+                client.read_gatt_char(UUID_SECRET_KEY), timeout=10.0
+            )
+        except Exception as e:
+            logger.debug("UUID read failed, trying handle 0x3f: %s", e)
+            try:
+                data = await asyncio.wait_for(
+                    client.read_gatt_char(HANDLE_SECRET_KEY), timeout=10.0
+                )
+            except Exception as e2:
+                logger.error("Failed to read secret key from %s: %s", address, e2)
+                raise RuntimeError(
+                    f"Failed to read secret key: {e2}. "
+                    "Make sure the timer button was pressed to enter pairing mode."
+                ) from e2
+        
+        logger.debug("Secret key read from %s", address)
         return bytes(data)[:16].hex()
+    finally:
+        if client.is_connected:
+            await client.disconnect()
 
 
-async def get_secret_key(address: str, pair: bool) -> None:
-    print(await _get_secret_key_value(address, pair))
+async def get_secret_key(address: str, pin: int = 0) -> None:
+    print("Push the timer button on the thermostat, then press Enter...")
+    input()
+    print(await _get_secret_key_value(address, pin))
 
 
 async def _read_info_data(
     address: str,
     secret_key: str,
-    pin: int | None,
-    pair: bool,
+    pin: int,
     skip_battery: bool,
 ) -> dict[str, object]:
     key = bytes.fromhex(secret_key)
-    async with BleakClient(address) as client:
-        await _maybe_pair(client, pair)
+    # Use longer timeout (90s) since this device takes ~27s to connect
+    async with BleakClient(address, timeout=90.0) as client:
         await _send_pin(client, pin)
 
         temp_raw = await asyncio.wait_for(
@@ -150,11 +225,10 @@ async def _read_info_data(
 async def read_info(
     address: str,
     secret_key: str,
-    pin: int | None,
-    pair: bool,
+    pin: int,
     skip_battery: bool,
 ) -> None:
-    info = await _read_info_data(address, secret_key, pin, pair, skip_battery)
+    info = await _read_info_data(address, secret_key, pin, skip_battery)
     if info["battery"] is not None:
         print(f"battery: {info['battery']}%")
     print(f"room_temp: {info['room_temp']} C")
@@ -166,14 +240,12 @@ async def _set_temperature_value(
     address: str,
     secret_key: str,
     temperature: float,
-    pin: int | None,
-    pair: bool,
+    pin: int,
 ) -> float:
     key = bytes.fromhex(secret_key)
     bounded = max(MIN_TEMP_C, min(MAX_TEMP_C, temperature))
 
-    async with BleakClient(address) as client:
-        await _maybe_pair(client, pair)
+    async with BleakClient(address, timeout=90.0) as client:
         await _send_pin(client, pin)
         temp_raw = await asyncio.wait_for(
             client.read_gatt_char(UUID_TEMPERATURE), timeout=10.0
@@ -193,11 +265,10 @@ async def set_temperature(
     address: str,
     secret_key: str,
     temperature: float,
-    pin: int | None,
-    pair: bool,
+    pin: int,
 ) -> None:
     bounded = await _set_temperature_value(
-        address, secret_key, temperature, pin, pair
+        address, secret_key, temperature, pin
     )
     if abs(bounded - temperature) > 0.0001:
         print(f"clamped_set_point: {bounded} C")
@@ -281,16 +352,15 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
     while True:
         secret = state.get("secret_key") or ""
         pin = state.get("pin")
-        pair = state.get("pair", False)
         pin_label = "" if pin is None else str(pin)
         header = f"{device.address} | {device.name or '-'}"
+        mode = " [PAIRING]" if device.in_pairing_mode else ""
         items = [
-            "Read secret key (pairing mode)",
+            f"Read secret key{mode}",
             "Read info",
             "Set temperature",
             f"Set secret key (current: {secret or '-'})",
             f"Set PIN (current: {pin_label or '-'})",
-            f"Toggle pair before connect (current: {'on' if pair else 'off'})",
             "Back",
         ]
         _draw_list(
@@ -313,12 +383,14 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
             continue
 
         if selected == 0:
+            _message(stdscr, "Push the timer button on the thermostat...")
+            stdscr.refresh()
             try:
                 secret_key = _run_async_with_spinner(
                     stdscr,
-                    _get_secret_key_value(device.address, True),
+                    _get_secret_key_value(device.address, pin if isinstance(pin, int) else 0),
                     "Reading secret key",
-                    timeout=20.0,
+                    timeout=120.0,
                 )
                 state["secret_key"] = secret_key
                 _message(stdscr, "Secret key read and stored.")
@@ -334,12 +406,11 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
                     _read_info_data(
                         device.address,
                         str(secret),
-                        pin if isinstance(pin, int) else None,
-                        bool(pair),
+                        pin if isinstance(pin, int) else 0,
                         False,
                     ),
                     "Reading info",
-                    timeout=20.0,
+                    timeout=120.0,
                 )
                 battery = info["battery"]
                 msg = (
@@ -364,11 +435,10 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
                         device.address,
                         str(secret),
                         target,
-                        pin if isinstance(pin, int) else None,
-                        bool(pair),
+                        pin if isinstance(pin, int) else 0,
                     ),
                     "Setting temperature",
-                    timeout=20.0,
+                    timeout=120.0,
                 )
                 _message(stdscr, f"Setpoint updated to {bounded} C")
             except Exception as exc:
@@ -405,8 +475,6 @@ def _device_menu(stdscr, device: ScannedDevice, state: dict[str, object]) -> Non
                     state["pin"] = pin_value
                     _message(stdscr, "PIN updated.")
         elif selected == 5:
-            state["pair"] = not bool(pair)
-        elif selected == 6:
             return
 
 
@@ -457,7 +525,7 @@ def _tui_main(stdscr) -> None:
             device = devices[selected]
             state = per_device_state.setdefault(
                 device.address,
-                {"secret_key": "", "pin": None, "pair": False},
+                {"secret_key": "", "pin": None},
             )
             _device_menu(stdscr, device, state)
             status = "Ready."
@@ -467,55 +535,405 @@ def tui() -> None:
     curses.wrapper(_tui_main)
 
 
+
+@dataclass
+class WizardState:
+    phase: str = "scanning"
+    devices: list[ScannedDevice] = field(default_factory=list)
+    selected_idx: int = 0
+    selected_device: ScannedDevice | None = None
+    secret_key: str = ""
+    pin: int | None = None
+    info: dict[str, object] | None = None
+    error: str = ""
+    status_msg: str = ""
+    last_poll: float = 0.0
+
+
+def _wizard_draw_scanning(
+    stdscr, state: WizardState, scan_done: bool, spinner_idx: int
+) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+
+    spinner = ["|", "/", "-", "\\"]
+    if scan_done:
+        title = f"Danfoss Eco Wizard - Found {len(state.devices)} device(s)"
+    else:
+        title = f"Danfoss Eco Wizard - Scanning {spinner[spinner_idx % 4]}"
+
+    stdscr.addstr(0, 0, title[: width - 1], curses.A_BOLD)
+
+    if not state.devices:
+        stdscr.addstr(2, 2, "Searching for eTRV devices..."[: width - 3])
+    else:
+        for idx, dev in enumerate(state.devices):
+            row = 2 + idx
+            if row >= height - 3:
+                break
+            mode = " [PAIRING]" if dev.in_pairing_mode else ""
+            label = f"{dev.address} | {dev.name or '-'}{mode}"
+            if idx == state.selected_idx:
+                stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(row, 2, label[: width - 3])
+            if idx == state.selected_idx:
+                stdscr.attroff(curses.A_REVERSE)
+
+    footer = "[↑↓] Navigate  [Enter] Select  [q] Quit"
+    if scan_done:
+        footer = "[↑↓] Navigate  [Enter] Select  [r] Rescan  [q] Quit"
+    stdscr.addstr(height - 2, 0, footer[: width - 1])
+
+    if state.error:
+        stdscr.addstr(height - 1, 0, state.error[: width - 1], curses.A_BOLD)
+
+    stdscr.refresh()
+
+
+def _wizard_draw_connecting(stdscr, state: WizardState) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+
+    dev = state.selected_device
+    if dev is None:
+        return
+    title = f"Connecting to {dev.name or dev.address}..."
+    stdscr.addstr(0, 0, title[: width - 1], curses.A_BOLD)
+    stdscr.addstr(2, 2, state.status_msg[: width - 3])
+
+    if state.error:
+        stdscr.addstr(height - 1, 0, state.error[: width - 1], curses.A_BOLD)
+
+    stdscr.refresh()
+
+
+def _wizard_draw_status(stdscr, state: WizardState, spinner_idx: int) -> None:
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+
+    dev = state.selected_device
+    if dev is None:
+        return
+    title = f"{dev.name or '-'} - {dev.address}"
+    stdscr.addstr(0, 0, title[: width - 1], curses.A_BOLD)
+
+    info = state.info or {}
+    row = 2
+
+    battery = info.get("battery")
+    if battery is not None:
+        stdscr.addstr(row, 2, f"Battery:    {battery}%"[: width - 3])
+        row += 1
+
+    room_temp = info.get("room_temp")
+    if room_temp is not None:
+        stdscr.addstr(row, 2, f"Room Temp:  {room_temp}°C"[: width - 3])
+        row += 1
+
+    set_point = info.get("set_point")
+    if set_point is not None:
+        stdscr.addstr(row, 2, f"Setpoint:   {set_point}°C"[: width - 3], curses.A_BOLD)
+        row += 1
+
+    name = info.get("name")
+    if name:
+        stdscr.addstr(row, 2, f"Name:       {name}"[: width - 3])
+        row += 1
+
+    row += 1
+    elapsed = time.monotonic() - state.last_poll
+    next_poll = max(0, POLL_INTERVAL_SECS - elapsed)
+    spinner = ["|", "/", "-", "\\"]
+    poll_status = f"Next refresh in {int(next_poll)}s {spinner[spinner_idx % 4]}"
+    stdscr.addstr(row, 2, poll_status[: width - 3])
+
+    footer = "[+/-] Adjust temp  [r] Refresh  [b] Back  [q] Quit"
+    stdscr.addstr(height - 2, 0, footer[: width - 1])
+
+    if state.status_msg:
+        stdscr.addstr(height - 1, 0, state.status_msg[: width - 1])
+    if state.error:
+        stdscr.addstr(height - 1, 0, state.error[: width - 1], curses.A_BOLD)
+
+    stdscr.refresh()
+
+
+def _wizard_do_connect(stdscr, state: WizardState) -> bool:
+    dev = state.selected_device
+    if dev is None:
+        return False
+    state.error = ""
+
+    if not dev.in_pairing_mode:
+        state.status_msg = "Push the timer button on the thermostat..."
+        _wizard_draw_connecting(stdscr, state)
+        stdscr.nodelay(False)
+        stdscr.getch()
+        stdscr.nodelay(True)
+
+    state.status_msg = "Reading secret key..."
+    _wizard_draw_connecting(stdscr, state)
+
+    try:
+        secret_key = _run_async_with_spinner(
+            stdscr,
+            _get_secret_key_value(dev.address, pin=state.pin or 0),
+            "Pairing",
+            timeout=120.0,
+        )
+        state.secret_key = secret_key
+        state.status_msg = f"Secret key: {secret_key[:8]}..."
+        _wizard_draw_connecting(stdscr, state)
+    except Exception as exc:
+        state.error = f"Pairing failed: {exc}"
+        return False
+
+    state.status_msg = "Reading device data..."
+    _wizard_draw_connecting(stdscr, state)
+
+    try:
+        info = _run_async_with_spinner(
+            stdscr,
+            _read_info_data(
+                dev.address,
+                state.secret_key,
+                state.pin or 0,
+                skip_battery=False,
+            ),
+            "Reading",
+            timeout=120.0,
+        )
+        state.info = info
+        state.last_poll = time.monotonic()
+    except Exception as exc:
+        state.error = f"Read failed: {exc}"
+        return False
+
+    return True
+
+
+def _wizard_refresh_info(stdscr, state: WizardState) -> bool:
+    dev = state.selected_device
+    if dev is None:
+        return False
+    state.error = ""
+    state.status_msg = "Refreshing..."
+
+    try:
+        info = _run_async_with_spinner(
+            stdscr,
+            _read_info_data(
+                dev.address,
+                state.secret_key,
+                state.pin or 0,
+                skip_battery=False,
+            ),
+            "Refreshing",
+            timeout=120.0,
+        )
+        state.info = info
+        state.last_poll = time.monotonic()
+        state.status_msg = "Updated."
+        return True
+    except Exception as exc:
+        state.error = f"Refresh failed: {exc}"
+        return False
+
+
+def _wizard_adjust_temp(stdscr, state: WizardState, delta: float) -> None:
+    dev = state.selected_device
+    if dev is None:
+        return
+    current: float = 20.0
+    if state.info:
+        raw = state.info.get("set_point")
+        if isinstance(raw, (int, float)):
+            current = float(raw)
+    new_temp = max(MIN_TEMP_C, min(MAX_TEMP_C, current + delta))
+
+    state.status_msg = f"Setting to {new_temp}°C..."
+    state.error = ""
+
+    try:
+        bounded = _run_async_with_spinner(
+            stdscr,
+            _set_temperature_value(
+                dev.address,
+                state.secret_key,
+                new_temp,
+                state.pin or 0,
+            ),
+            "Setting",
+            timeout=120.0,
+        )
+        if state.info:
+            state.info["set_point"] = bounded
+        state.status_msg = f"Setpoint: {bounded}°C"
+    except Exception as exc:
+        state.error = f"Set failed: {exc}"
+
+
+def _wizard_main(stdscr) -> None:
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    stdscr.nodelay(True)
+
+    state = WizardState()
+    scan_future = _EXECUTOR.submit(_run_async, _scan_devices(10.0, False))
+    scan_done = False
+    spinner_idx = 0
+
+    while True:
+        spinner_idx += 1
+
+        if state.phase == "scanning":
+            if scan_future and scan_future.done() and not scan_done:
+                try:
+                    state.devices = scan_future.result()
+                    scan_done = True
+                except Exception as exc:
+                    state.error = f"Scan failed: {exc}"
+                    scan_done = True
+
+            _wizard_draw_scanning(stdscr, state, scan_done, spinner_idx)
+
+            key = stdscr.getch()
+            if key == ord("q"):
+                return
+            if key == curses.KEY_UP and state.selected_idx > 0:
+                state.selected_idx -= 1
+            elif key == curses.KEY_DOWN and state.selected_idx < len(state.devices) - 1:
+                state.selected_idx += 1
+            elif key == ord("r") and scan_done:
+                state.devices = []
+                state.selected_idx = 0
+                scan_done = False
+                state.error = ""
+                scan_future = _EXECUTOR.submit(_run_async, _scan_devices(10.0, False))
+            elif key in (10, 13) and state.devices:
+                state.selected_device = state.devices[state.selected_idx]
+                state.phase = "connecting"
+
+            time.sleep(0.1)
+
+        elif state.phase == "connecting":
+            stdscr.nodelay(False)
+            success = _wizard_do_connect(stdscr, state)
+            stdscr.nodelay(True)
+
+            if success:
+                state.phase = "status"
+            else:
+                _wizard_draw_connecting(stdscr, state)
+                stdscr.nodelay(False)
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 2,
+                    0,
+                    "Press any key to go back...",
+                )
+                stdscr.refresh()
+                stdscr.getch()
+                stdscr.nodelay(True)
+                state.phase = "scanning"
+                state.selected_device = None
+                state.secret_key = ""
+                state.info = None
+
+        elif state.phase == "status":
+            elapsed = time.monotonic() - state.last_poll
+            if elapsed >= POLL_INTERVAL_SECS:
+                stdscr.nodelay(False)
+                _wizard_refresh_info(stdscr, state)
+                stdscr.nodelay(True)
+
+            _wizard_draw_status(stdscr, state, spinner_idx)
+
+            key = stdscr.getch()
+            if key == ord("q"):
+                return
+            elif key == ord("b"):
+                state.phase = "scanning"
+                state.selected_device = None
+                state.secret_key = ""
+                state.info = None
+                state.status_msg = ""
+                state.error = ""
+            elif key == ord("r"):
+                stdscr.nodelay(False)
+                _wizard_refresh_info(stdscr, state)
+                stdscr.nodelay(True)
+            elif key in (ord("+"), ord("=")):
+                stdscr.nodelay(False)
+                _wizard_adjust_temp(stdscr, state, TEMP_STEP)
+                stdscr.nodelay(True)
+            elif key in (ord("-"), ord("_")):
+                stdscr.nodelay(False)
+                _wizard_adjust_temp(stdscr, state, -TEMP_STEP)
+                stdscr.nodelay(True)
+
+            time.sleep(0.1)
+
+
+def wizard() -> None:
+    curses.wrapper(_wizard_main)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Danfoss Eco BLE helper (scan, key, info, set-temp, tui)."
+        description="Danfoss Eco BLE helper. Run without args for all-in-one wizard."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("wizard", help="All-in-one wizard (scan, pair, control).")
 
     scan_parser = subparsers.add_parser("scan", help="Scan for nearby eTRV devices.")
     scan_parser.add_argument("--timeout", type=float, default=8.0)
     scan_parser.add_argument("--all", action="store_true")
 
-    key_parser = subparsers.add_parser("get-key", help="Read secret key (pairing mode).")
+    key_parser = subparsers.add_parser("get-key", help="Read secret key (push timer button first).")
     key_parser.add_argument("address")
-    key_parser.add_argument("--pair", action="store_true")
+    key_parser.add_argument("--pin", type=int, default=0, help="PIN code (default: 0000)")
 
     info_parser = subparsers.add_parser("info", help="Read battery/temp/name.")
     info_parser.add_argument("address")
     info_parser.add_argument("secret_key")
-    info_parser.add_argument("--pin", type=int, default=None)
-    info_parser.add_argument("--pair", action="store_true")
+    info_parser.add_argument("--pin", type=int, default=0, help="PIN code (default: 0000)")
     info_parser.add_argument("--skip-battery", action="store_true")
 
     set_parser = subparsers.add_parser("set-temp", help="Set target temperature.")
     set_parser.add_argument("address")
     set_parser.add_argument("secret_key")
     set_parser.add_argument("temperature", type=float)
-    set_parser.add_argument("--pin", type=int, default=None)
-    set_parser.add_argument("--pair", action="store_true")
+    set_parser.add_argument("--pin", type=int, default=0, help="PIN code (default: 0000)")
 
-    subparsers.add_parser("tui", help="Interactive terminal UI.")
+    subparsers.add_parser("tui", help="Legacy interactive terminal UI.")
 
     return parser.parse_args()
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s | %(levelname)-5s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    
     if len(sys.argv) == 1:
-        tui()
+        wizard()
         return
     args = _parse_args()
-    if args.command == "scan":
+    if args.command == "wizard":
+        wizard()
+    elif args.command == "scan":
         asyncio.run(scan(args.timeout, args.all))
     elif args.command == "get-key":
-        asyncio.run(get_secret_key(args.address, args.pair))
+        asyncio.run(get_secret_key(args.address, args.pin))
     elif args.command == "info":
         asyncio.run(
             read_info(
                 args.address,
                 args.secret_key,
                 args.pin,
-                args.pair,
                 args.skip_battery,
             )
         )
@@ -526,7 +944,6 @@ def main() -> None:
                 args.secret_key,
                 args.temperature,
                 args.pin,
-                args.pair,
             )
         )
     elif args.command == "tui":
