@@ -27,7 +27,23 @@ The Danfoss Eco eTRV has **unusually slow BLE communication**:
 - **GATT service discovery**: ~30 seconds  
 - **Total time per operation**: Up to 60-90 seconds
 
-This is normal behavior for this device. The integration uses a 90-second connection timeout to accommodate this. During setup and polling, expect significant wait times—this is not a bug.
+This is normal behavior for this device. The integration uses a 90-second connection timeout to accommodate this.
+
+#### ESPHome Bluetooth Proxy Limitation
+
+**ESPHome Bluetooth proxies have a hardcoded 30-second timeout** for GATT operations, which is often insufficient for the Danfoss Eco. If you see errors like:
+
+```
+Timeout waiting for BluetoothGATTReadResponse after 30.0s
+```
+
+**You must use direct Bluetooth** instead of an ESPHome proxy:
+
+1. Ensure your Home Assistant host has a working Bluetooth adapter
+2. In Home Assistant, go to **Settings → Devices & Services → Bluetooth**
+3. Make sure the device connects via the local adapter, not a proxy
+
+The 30-second timeout is hardcoded in the `bleak-esphome` library and cannot be configured from Home Assistant.
 
 ### Notes
 - The device must be in pairing mode to retrieve the secret key (press and hold the timer button until the display shows the pairing icon).

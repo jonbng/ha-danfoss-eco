@@ -10,7 +10,10 @@
       },
       "pair": {
         "title": "Parita laite",
-        "description": "Paina termostaatin painiketta kerran siirtyäksesi paritustilaan ja napsauta sitten Lähetä hakeaksesi salaisen avaimen."
+        "description": "Paina kellokuvaketta kerran lyhyesti siirtyäksesi paritustilaan ja napsauta sitten Lähetä hakeaksesi salaisen avaimen. Jos olet asettanut PIN-koodin sovelluksessa, syötä se alle.",
+        "data": {
+          "pin": "[%key:common::config_flow::data::pin%]"
+        }
       }
     },
     "error": {

@@ -10,7 +10,10 @@
       },
       "pair": {
         "title": "Gerät koppeln",
-        "description": "Drücken Sie einmal die Thermostat-Taste, um den Kopplungsmodus zu starten, und klicken Sie dann auf Absenden, um den geheimen Schlüssel abzurufen."
+        "description": "Drücken Sie das Uhrsymbol einmal kurz, um den Kopplungsmodus zu starten, und klicken Sie dann auf Absenden, um den geheimen Schlüssel abzurufen. Wenn Sie in der App eine PIN festgelegt haben, geben Sie sie unten ein.",
+        "data": {
+          "pin": "[%key:common::config_flow::data::pin%]"
+        }
       }
     },
     "error": {

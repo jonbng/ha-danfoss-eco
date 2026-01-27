@@ -113,7 +113,8 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Only attempt pairing when user submits the form (user_input is not None)
         if user_input is not None:
             try:
-                secret_key = await self._async_get_secret_key(self._address, None)
+                pin = user_input.get(CONF_PIN)
+                secret_key = await self._async_get_secret_key(self._address, pin)
             except EtrvBleTimeoutError as err:
                 _LOGGER.warning("Pairing timed out: %s", err)
                 errors["base"] = "timeout_connect"
@@ -126,13 +127,19 @@ class DanfossEcoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_ADDRESS: self._address,
                         CONF_SECRET_KEY: secret_key,
-                        CONF_PIN: DEFAULT_PIN,
+                        CONF_PIN: pin if pin is not None else DEFAULT_PIN,
                     },
                 )
 
         return self.async_show_form(
             step_id="pair",
-            data_schema=vol.Schema({}),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_PIN, default=DEFAULT_PIN
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=9999))
+                }
+            ),
             errors=errors,
             description_placeholders={"name": self._name or self._address or ""},
         )

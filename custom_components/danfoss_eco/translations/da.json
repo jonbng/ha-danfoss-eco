@@ -10,7 +10,10 @@
       },
       "pair": {
         "title": "Par enhed",
-        "description": "Tryk én gang på termostatknappen for at gå i parringsmode, og klik derefter på Send for at hente den hemmelige nøgle."
+        "description": "Tryk kort på ur-ikonet én gang for at gå i parringsmode, og klik derefter på Send for at hente den hemmelige nøgle. Hvis du har angivet en PIN i appen, så indtast den nedenfor.",
+        "data": {
+          "pin": "[%key:common::config_flow::data::pin%]"
+        }
       }
     },
     "error": {
