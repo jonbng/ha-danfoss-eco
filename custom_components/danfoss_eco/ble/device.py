@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from ..const import (
@@ -15,6 +16,8 @@ from ..const import (
 from .client import EtrvBleClient
 from .structs import BatteryData, NameData, TemperatureData
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class EtrvDevice:
     """High-level device operations."""
@@ -23,16 +26,16 @@ class EtrvDevice:
         self._client = client
 
     async def async_read_state(self) -> dict[str, object]:
-        # Battery is standard BLE characteristic (0x2A19) - NOT XXTEA encrypted
-        # Must read it separately with decode=False
+        _LOGGER.debug("Reading battery (handle 0x10, no encryption)")
         battery_raw = await self._client.async_read(
             UUID_BATTERY,
             decode=False,
-            send_pin=False,  # Battery doesn't require PIN
+            send_pin=False,
         )
         battery = BatteryData.from_bytes(battery_raw).battery
+        _LOGGER.debug("Battery: %d%%", battery)
 
-        # Temperature and Name are Danfoss custom characteristics - XXTEA encrypted
+        _LOGGER.debug("Reading temperature and name (encrypted)")
         results = await self._client.async_read_many(
             [UUID_TEMPERATURE, UUID_NAME],
             decode=True,
@@ -40,6 +43,8 @@ class EtrvDevice:
         )
         temp = TemperatureData.from_bytes(results[UUID_TEMPERATURE])
         name = NameData.from_bytes(results[UUID_NAME]).name
+        _LOGGER.debug("Temperature: %.1f°C, Setpoint: %.1f°C, Name: %s", 
+                      temp.room_temperature, temp.set_point, name)
         return {
             "battery": battery,
             "room_temperature": temp.room_temperature,

@@ -22,6 +22,7 @@ from .crypto import EtrvDecodeError, etrv_decode, etrv_encode
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CONNECT_TIMEOUT = 90.0
+DEFAULT_GATT_TIMEOUT = 60.0
 
 
 class EtrvBleError(Exception):
@@ -124,19 +125,47 @@ class EtrvBleClient:
         self._pin_sent = True
         _LOGGER.debug("PIN sent successfully to %s", self._address)
 
-    async def _read_gatt_char(self, client: BleakClient, char_uuid: str) -> bytes:
+    async def _read_gatt_char_with_timeout(
+        self, client: BleakClient, char_specifier: int | str, timeout: float
+    ) -> bytes:
+        """Read GATT char, trying with timeout kwarg first, then without for compatibility.
+        
+        The timeout kwarg is only supported by patched bleak-esphome (PR #264).
+        Standard bleak/bleak-esphome will raise TypeError, so we fall back gracefully.
+        """
+        try:
+            return bytes(await client.read_gatt_char(char_specifier, timeout=timeout))
+        except TypeError as err:
+            if "timeout" in str(err):
+                # Unpatched bleak-esphome - timeout kwarg not supported
+                _LOGGER.debug(
+                    "timeout kwarg not supported (unpatched bleak-esphome), "
+                    "falling back to default timeout"
+                )
+                return bytes(await client.read_gatt_char(char_specifier))
+            raise
+
+    async def _read_gatt_char(
+        self, client: BleakClient, char_uuid: str, timeout: float = DEFAULT_GATT_TIMEOUT
+    ) -> bytes:
         """Read a GATT characteristic, trying handle first then UUID fallback."""
         handle = HANDLE_MAP.get(char_uuid)
         if handle is not None:
             try:
-                return bytes(await client.read_gatt_char(handle))
-            except BleakError:
+                _LOGGER.debug("Reading handle 0x%02X for %s (timeout=%.1fs)", handle, char_uuid[-8:], timeout)
+                result = await self._read_gatt_char_with_timeout(client, handle, timeout)
+                _LOGGER.debug("Handle 0x%02X read success (%d bytes)", handle, len(result))
+                return result
+            except BleakError as err:
                 _LOGGER.debug(
-                    "Handle 0x%02X read failed for %s, falling back to UUID",
+                    "Handle 0x%02X read failed: %s, falling back to UUID",
                     handle,
-                    char_uuid,
+                    err,
                 )
-        return bytes(await client.read_gatt_char(char_uuid))
+        _LOGGER.debug("Reading UUID %s (timeout=%.1fs)", char_uuid[-8:], timeout)
+        result = await self._read_gatt_char_with_timeout(client, char_uuid, timeout)
+        _LOGGER.debug("UUID read success (%d bytes)", len(result))
+        return result
 
     async def _write_gatt_char(
         self, client: BleakClient, char_uuid: str, data: bytes
@@ -162,10 +191,11 @@ class EtrvBleClient:
         decode: bool = True,
         send_pin: bool = True,
         timeout: float | None = None,
+        gatt_timeout: float = DEFAULT_GATT_TIMEOUT,
     ) -> bytes:
         async with self._lock:
             client = await self._ensure_connected(send_pin=send_pin, timeout=timeout)
-            data = await self._read_gatt_char(client, char_uuid)
+            data = await self._read_gatt_char(client, char_uuid, timeout=gatt_timeout)
             if decode:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for decode")
@@ -183,12 +213,13 @@ class EtrvBleClient:
         *,
         decode: bool = True,
         send_pin: bool = True,
+        gatt_timeout: float = DEFAULT_GATT_TIMEOUT,
     ) -> dict[str, bytes]:
         async with self._lock:
             client = await self._ensure_connected(send_pin=send_pin)
             results: dict[str, bytes] = {}
             for char_uuid in char_uuids:
-                data = await self._read_gatt_char(client, char_uuid)
+                data = await self._read_gatt_char(client, char_uuid, timeout=gatt_timeout)
                 if decode:
                     if self._secret is None:
                         raise EtrvBleError("Secret key missing for decode")

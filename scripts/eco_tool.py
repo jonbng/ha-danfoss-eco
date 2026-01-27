@@ -31,13 +31,15 @@ UUID_NAME = "10020006-2749-0001-0000-00805f9b042f"  # Device name
 UUID_SECRET_KEY = "1002000b-2749-0001-0000-00805f9b042f"
 
 # Handle map (from libetrv) - allows bypassing service discovery
-# These are ATT handles used by bluepy's readCharacteristic/writeCharacteristic
-HANDLE_PIN = 0x24  # PIN characteristic (write handle, value handle is 0x23)
-HANDLE_SECRET_KEY = 0x3f  # Secret key characteristic
-HANDLE_TEMPERATURE = 0x2d  # Temperature characteristic
-HANDLE_NAME = 0x30  # Name characteristic
-HANDLE_SETTINGS = 0x2a  # Settings characteristic
-HANDLE_BATTERY = 0x10  # Battery characteristic
+# Map: UUID -> handle (int)
+HANDLE_MAP: dict[str, int] = {
+    UUID_BATTERY: 0x10,
+    UUID_PIN: 0x24,
+    UUID_SETTINGS: 0x2A,
+    UUID_TEMPERATURE: 0x2D,
+    UUID_NAME: 0x30,
+    UUID_SECRET_KEY: 0x3F,
+}
 
 # Service UUID for Danfoss custom service
 UUID_DANFOSS_SERVICE = "10020000-2749-0001-0000-00805f9b042f"
@@ -93,6 +95,31 @@ async def _send_pin(client: BleakClient, pin: int) -> None:
     await asyncio.sleep(0.2)
 
 
+async def _read_gatt_char(client: BleakClient, char_uuid: str) -> bytes:
+    """Read a GATT characteristic, trying handle first then UUID fallback."""
+    from bleak.exc import BleakError
+    handle = HANDLE_MAP.get(char_uuid)
+    if handle is not None:
+        try:
+            return bytes(await client.read_gatt_char(handle))
+        except BleakError:
+            logger.debug("Handle 0x%02X failed, falling back to UUID", handle)
+    return bytes(await client.read_gatt_char(char_uuid))
+
+
+async def _write_gatt_char(client: BleakClient, char_uuid: str, data: bytes) -> None:
+    """Write to a GATT characteristic, trying handle first then UUID fallback."""
+    from bleak.exc import BleakError
+    handle = HANDLE_MAP.get(char_uuid)
+    if handle is not None:
+        try:
+            await client.write_gatt_char(handle, data, response=True)
+            return
+        except BleakError:
+            logger.debug("Handle 0x%02X failed, falling back to UUID", handle)
+    await client.write_gatt_char(char_uuid, data, response=True)
+
+
 @dataclass
 class ScannedDevice:
     address: str
@@ -137,8 +164,6 @@ async def _get_secret_key_value(address: str, pin: int = 0) -> str:
     """Read secret key from device. Device must be in pairing mode (timer button pressed)."""
     logger.debug("Connecting to %s", address)
     
-    # Use longer timeout (90s) since this device takes ~27s just to connect,
-    # plus additional time for service discovery
     client = BleakClient(address, timeout=90.0)
     try:
         logger.debug("Attempting connection with dangerous_use_bleak_cache=True")
@@ -156,20 +181,14 @@ async def _get_secret_key_value(address: str, pin: int = 0) -> str:
         logger.debug("Reading secret key from %s", address)
         try:
             data = await asyncio.wait_for(
-                client.read_gatt_char(UUID_SECRET_KEY), timeout=10.0
+                _read_gatt_char(client, UUID_SECRET_KEY), timeout=10.0
             )
         except Exception as e:
-            logger.debug("UUID read failed, trying handle 0x3f: %s", e)
-            try:
-                data = await asyncio.wait_for(
-                    client.read_gatt_char(HANDLE_SECRET_KEY), timeout=10.0
-                )
-            except Exception as e2:
-                logger.error("Failed to read secret key from %s: %s", address, e2)
-                raise RuntimeError(
-                    f"Failed to read secret key: {e2}. "
-                    "Make sure the timer button was pressed to enter pairing mode."
-                ) from e2
+            logger.error("Failed to read secret key from %s: %s", address, e)
+            raise RuntimeError(
+                f"Failed to read secret key: {e}. "
+                "Make sure the timer button was pressed to enter pairing mode."
+            ) from e
         
         logger.debug("Secret key read from %s", address)
         return bytes(data)[:16].hex()
@@ -191,20 +210,19 @@ async def _read_info_data(
     skip_battery: bool,
 ) -> dict[str, object]:
     key = bytes.fromhex(secret_key)
-    # Use longer timeout (90s) since this device takes ~27s to connect
     async with BleakClient(address, timeout=90.0) as client:
         await _send_pin(client, pin)
 
         temp_raw = await asyncio.wait_for(
-            client.read_gatt_char(UUID_TEMPERATURE), timeout=10.0
+            _read_gatt_char(client, UUID_TEMPERATURE), timeout=10.0
         )
         name_raw = await asyncio.wait_for(
-            client.read_gatt_char(UUID_NAME), timeout=10.0
+            _read_gatt_char(client, UUID_NAME), timeout=10.0
         )
         battery_raw = None
         if not skip_battery:
             battery_raw = await asyncio.wait_for(
-                client.read_gatt_char(UUID_BATTERY), timeout=10.0
+                _read_gatt_char(client, UUID_BATTERY), timeout=10.0
             )
 
     temp_decoded = etrv_decode(bytes(temp_raw), key)
@@ -248,14 +266,14 @@ async def _set_temperature_value(
     async with BleakClient(address, timeout=90.0) as client:
         await _send_pin(client, pin)
         temp_raw = await asyncio.wait_for(
-            client.read_gatt_char(UUID_TEMPERATURE), timeout=10.0
+            _read_gatt_char(client, UUID_TEMPERATURE), timeout=10.0
         )
         decoded = etrv_decode(bytes(temp_raw), key)
         raw = bytearray(decoded)
         raw[0] = _from_temperature(bounded)
         payload = etrv_encode(bytes(raw), key)
         await asyncio.wait_for(
-            client.write_gatt_char(UUID_TEMPERATURE, payload, response=True),
+            _write_gatt_char(client, UUID_TEMPERATURE, payload),
             timeout=10.0,
         )
     return bounded

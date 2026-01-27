@@ -37,13 +37,25 @@ This is normal behavior for this device. The integration uses a 90-second connec
 Timeout waiting for BluetoothGATTReadResponse after 30.0s
 ```
 
-**You must use direct Bluetooth** instead of an ESPHome proxy:
+**Workaround: Install patched bleak-esphome**
+
+A PR ([#264](https://github.com/Bluetooth-Devices/bleak-esphome/pull/264)) has been submitted to allow custom timeouts. Until it's merged, you can install the patched version:
+
+```bash
+# SSH into your HA instance, then:
+docker exec -it homeassistant bash
+pip install --upgrade git+https://github.com/jonbng/bleak-esphome.git@feat/custom-gatt-timeout
+exit
+ha core restart
+```
+
+**Note:** This gets overwritten on HA updates - you'll need to re-run after each update.
+
+**Alternative: Use direct Bluetooth** instead of an ESPHome proxy:
 
 1. Ensure your Home Assistant host has a working Bluetooth adapter
 2. In Home Assistant, go to **Settings → Devices & Services → Bluetooth**
 3. Make sure the device connects via the local adapter, not a proxy
-
-The 30-second timeout is hardcoded in the `bleak-esphome` library and cannot be configured from Home Assistant.
 
 ### Notes
 - The device must be in pairing mode to retrieve the secret key (press and hold the timer button until the display shows the pairing icon).
