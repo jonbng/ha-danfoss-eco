@@ -16,7 +16,7 @@ from bleak_retry_connector import (
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from ..const import UUID_PIN
+from ..const import HANDLE_MAP, UUID_PIN
 from .crypto import EtrvDecodeError, etrv_decode, etrv_encode
 
 _LOGGER = logging.getLogger(__name__)
@@ -124,6 +124,37 @@ class EtrvBleClient:
         self._pin_sent = True
         _LOGGER.debug("PIN sent successfully to %s", self._address)
 
+    async def _read_gatt_char(self, client: BleakClient, char_uuid: str) -> bytes:
+        """Read a GATT characteristic, trying handle first then UUID fallback."""
+        handle = HANDLE_MAP.get(char_uuid)
+        if handle is not None:
+            try:
+                return bytes(await client.read_gatt_char(handle))
+            except BleakError:
+                _LOGGER.debug(
+                    "Handle 0x%02X read failed for %s, falling back to UUID",
+                    handle,
+                    char_uuid,
+                )
+        return bytes(await client.read_gatt_char(char_uuid))
+
+    async def _write_gatt_char(
+        self, client: BleakClient, char_uuid: str, data: bytes
+    ) -> None:
+        """Write to a GATT characteristic, trying handle first then UUID fallback."""
+        handle = HANDLE_MAP.get(char_uuid)
+        if handle is not None:
+            try:
+                await client.write_gatt_char(handle, data, response=True)
+                return
+            except BleakError:
+                _LOGGER.debug(
+                    "Handle 0x%02X write failed for %s, falling back to UUID",
+                    handle,
+                    char_uuid,
+                )
+        await client.write_gatt_char(char_uuid, data, response=True)
+
     async def async_read(
         self,
         char_uuid: str,
@@ -134,7 +165,7 @@ class EtrvBleClient:
     ) -> bytes:
         async with self._lock:
             client = await self._ensure_connected(send_pin=send_pin, timeout=timeout)
-            data = await client.read_gatt_char(char_uuid)
+            data = await self._read_gatt_char(client, char_uuid)
             if decode:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for decode")
@@ -157,12 +188,12 @@ class EtrvBleClient:
             client = await self._ensure_connected(send_pin=send_pin)
             results: dict[str, bytes] = {}
             for char_uuid in char_uuids:
-                data = await client.read_gatt_char(char_uuid)
+                data = await self._read_gatt_char(client, char_uuid)
                 if decode:
                     if self._secret is None:
                         raise EtrvBleError("Secret key missing for decode")
                     try:
-                        data = etrv_decode(bytes(data), self._secret)
+                        data = etrv_decode(data, self._secret)
                     except EtrvDecodeError as exc:
                         raise EtrvBleError(str(exc)) from exc
                 results[char_uuid] = bytes(data)
@@ -185,7 +216,7 @@ class EtrvBleClient:
                 if self._secret is None:
                     raise EtrvBleError("Secret key missing for encode")
                 payload = etrv_encode(data, self._secret)
-            await client.write_gatt_char(char_uuid, payload, response=True)
+            await self._write_gatt_char(client, char_uuid, payload)
             if not self._stay_connected:
                 await self.async_disconnect()
 

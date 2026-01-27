@@ -33,6 +33,18 @@ UUID_NAME = "10020006-2749-0001-0000-00805f9b042f"
 UUID_CURRENT_TIME = "10020008-2749-0001-0000-00805f9b042f"
 UUID_SECRET_KEY = "1002000b-2749-0001-0000-00805f9b042f"
 
+# GATT handles from libetrv - skipping service discovery speeds up operations significantly
+# These are hardcoded handles that match the Danfoss Eco device's GATT structure
+# Map: UUID -> handle (int)
+HANDLE_MAP: dict[str, int] = {
+    UUID_BATTERY: 0x10,
+    UUID_PIN: 0x24,
+    UUID_SETTINGS: 0x2A,
+    UUID_TEMPERATURE: 0x2D,
+    UUID_NAME: 0x30,
+    UUID_SECRET_KEY: 0x3F,
+}
+
 MIN_TEMP_C = 10.0
 MAX_TEMP_C = 40.0
 TEMP_STEP = 0.5
