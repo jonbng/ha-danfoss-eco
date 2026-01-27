@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Parita laite",
-        "description": "Paina kellokuvaketta kerran lyhyesti siirtyäksesi paritustilaan ja napsauta sitten Lähetä hakeaksesi salaisen avaimen. Jos olet asettanut PIN-koodin sovelluksessa, syötä se alle.",
+        "description": "Paina kellokuvaketta kerran lyhyesti siirtyäksesi paritustilaan ja napsauta sitten Lähetä hakeaksesi salaisen avaimen. Jos olet asettanut PIN-koodin sovelluksessa, syötä se alle. Yhteyden muodostaminen voi kestää 60–90 sekuntia; tämä on normaalia.",
         "data": {
           "pin": "[%key:common::config_flow::data::pin%]"
         }

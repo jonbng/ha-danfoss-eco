@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Gerät koppeln",
-        "description": "Drücken Sie das Uhrsymbol einmal kurz, um den Kopplungsmodus zu starten, und klicken Sie dann auf Absenden, um den geheimen Schlüssel abzurufen. Wenn Sie in der App eine PIN festgelegt haben, geben Sie sie unten ein.",
+        "description": "Drücken Sie das Uhrsymbol einmal kurz, um den Kopplungsmodus zu starten, und klicken Sie dann auf Absenden, um den geheimen Schlüssel abzurufen. Wenn Sie in der App eine PIN festgelegt haben, geben Sie sie unten ein. Die Verbindung kann 60–90 Sekunden dauern; das ist normal.",
         "data": {
           "pin": "[%key:common::config_flow::data::pin%]"
         }

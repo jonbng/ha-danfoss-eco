@@ -10,7 +10,7 @@
       },
       "pair": {
         "title": "Pair device",
-        "description": "Short press the clock icon once to enter pairing mode, then click Submit to retrieve the secret key. If you set a PIN in the app, enter it below.",
+        "description": "Short press the clock icon once to enter pairing mode, then click Submit to retrieve the secret key. If you set a PIN in the app, enter it below. The connection can take 60–90 seconds; this is normal.",
         "data": {
           "pin": "[%key:common::config_flow::data::pin%]"
         }
