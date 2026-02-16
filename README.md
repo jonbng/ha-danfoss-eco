@@ -37,19 +37,7 @@ This is normal behavior for this device. The integration uses a 90-second connec
 Timeout waiting for BluetoothGATTReadResponse after 30.0s
 ```
 
-**Workaround: Install patched bleak-esphome**
-
-A PR ([#264](https://github.com/Bluetooth-Devices/bleak-esphome/pull/264)) has been submitted to allow custom timeouts. Until it's merged, you can install the patched version:
-
-```bash
-# SSH into your HA instance, then:
-docker exec -it homeassistant bash
-pip install --upgrade git+https://github.com/jonbng/bleak-esphome.git@feat/custom-gatt-timeout
-exit
-ha core restart
-```
-
-**Note:** This gets overwritten on HA updates - you'll need to re-run after each update.
+If you run into this, update your Home Assistant / ESPHome components to current versions, or use direct Bluetooth.
 
 **Alternative: Use direct Bluetooth** instead of an ESPHome proxy:
 

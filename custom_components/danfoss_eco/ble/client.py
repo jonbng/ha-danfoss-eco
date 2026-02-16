@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from typing import Iterable
 
 from bleak import BleakClient
@@ -22,7 +24,17 @@ from .crypto import EtrvDecodeError, etrv_decode, etrv_encode
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CONNECT_TIMEOUT = 90.0
-DEFAULT_GATT_TIMEOUT = 60.0
+DEFAULT_GATT_TIMEOUT = 90.0
+
+# Connection hardening (mirrors scripts/eco_tool.py approach):
+# - Avoid rapid connect/disconnect thrash in BlueZ
+# - Add backoff + jitter between attempts
+# - Re-run stale connection cleanup during retries
+CONNECT_ATTEMPT_TIMEOUT = 20.0
+CONNECT_RETRY_DELAY = 0.5
+CONNECT_BACKOFF_MAX = 8.0
+CONNECT_BACKOFF_JITTER = 0.35
+CONNECT_STALE_CLOSE_EVERY = 8.0
 
 
 class EtrvBleError(Exception):
@@ -67,42 +79,77 @@ class EtrvBleClient:
                 await self._send_pin_once()
             return self._client
 
-        # Clear any stale connections to this address before attempting to connect.
-        # This prevents "already_in_progress" errors from lingering connection attempts.
-        await close_stale_connections_by_address(self._address)
+        deadline = time.monotonic() + (timeout if timeout is not None else DEFAULT_CONNECT_TIMEOUT)
+        attempt = 0
+        last_err: Exception | None = None
+        last_stale_close = 0.0
 
-        ble_device = bluetooth.async_ble_device_from_address(
-            self._hass, self._address, connectable=True
-        )
-        if ble_device is None:
-            raise EtrvBleError(f"No connectable device found for {self._address}")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
 
-        try:
-            if timeout is not None:
-                async with asyncio.timeout(timeout):
-                    client = await establish_connection(
-                        BleakClientWithServiceCache,
-                        ble_device,
+            attempt += 1
+
+            # Periodically clear stale connections; BlueZ can get stuck with
+            # org.bluez.Error.InProgress / lingering connection attempts.
+            if (time.monotonic() - last_stale_close) > CONNECT_STALE_CLOSE_EVERY:
+                try:
+                    await close_stale_connections_by_address(self._address)
+                    last_stale_close = time.monotonic()
+                except Exception as err:
+                    _LOGGER.debug(
+                        "close_stale_connections_by_address(%s) failed: %s",
                         self._address,
+                        err,
                     )
-            else:
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    ble_device,
-                    self._address,
-                )
-        except TimeoutError as exc:
-            raise EtrvBleTimeoutError(
-                f"Timeout connecting to {self._address}"
-            ) from exc
-        except BleakError as exc:
-            raise EtrvBleError(f"Failed to connect to {self._address}") from exc
 
-        self._client = client
-        self._pin_sent = False
-        if send_pin:
-            await self._send_pin_once()
-        return client
+            ble_device = bluetooth.async_ble_device_from_address(
+                self._hass, self._address, connectable=True
+            )
+            if ble_device is None:
+                # If HA doesn't currently have a connectable BLEDevice, back off and retry.
+                last_err = EtrvBleError(f"No connectable device found for {self._address}")
+            else:
+                per_attempt = min(CONNECT_ATTEMPT_TIMEOUT, remaining)
+                started = time.monotonic()
+                try:
+                    async with asyncio.timeout(per_attempt + 5.0):
+                        # We manage our own backoff/retry loop; keep the connector
+                        # to a single attempt to avoid compounding timeouts.
+                        client = await establish_connection(
+                            BleakClientWithServiceCache,
+                            ble_device,
+                            self._address,
+                            max_attempts=1,
+                        )
+                    _LOGGER.debug(
+                        "Connected to %s on attempt %d in %.2fs",
+                        self._address,
+                        attempt,
+                        time.monotonic() - started,
+                    )
+
+                    self._client = client
+                    self._pin_sent = False
+                    if send_pin:
+                        await self._send_pin_once()
+                    return client
+                except TimeoutError as exc:
+                    last_err = exc
+                except BleakError as exc:
+                    last_err = exc
+
+            # Exponential backoff with jitter to reduce adapter thrash.
+            backoff = min(CONNECT_BACKOFF_MAX, CONNECT_RETRY_DELAY * (2 ** max(0, attempt - 1)))
+            backoff += random.uniform(0.0, backoff * CONNECT_BACKOFF_JITTER)
+            sleep_for = min(backoff, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+
+        raise EtrvBleTimeoutError(
+            f"Timeout connecting to {self._address} after {attempt} attempt(s): {last_err}"
+        )
 
     async def _send_pin_once(self) -> None:
         if self._pin_sent:
@@ -130,16 +177,16 @@ class EtrvBleClient:
     ) -> bytes:
         """Read GATT char, trying with timeout kwarg first, then without for compatibility.
         
-        The timeout kwarg is only supported by patched bleak-esphome (PR #264).
-        Standard bleak/bleak-esphome will raise TypeError, so we fall back gracefully.
+        Some Bleak backends accept a `timeout` kwarg; older ones raise TypeError, so we
+        fall back gracefully.
         """
         try:
             return bytes(await client.read_gatt_char(char_specifier, timeout=timeout))
         except TypeError as err:
             if "timeout" in str(err):
-                # Unpatched bleak-esphome - timeout kwarg not supported
+                # Older backend - timeout kwarg not supported
                 _LOGGER.debug(
-                    "timeout kwarg not supported (unpatched bleak-esphome), "
+                    "timeout kwarg not supported by backend, "
                     "falling back to default timeout"
                 )
                 return bytes(await client.read_gatt_char(char_specifier))

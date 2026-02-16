@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import curses
 import logging
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,12 +16,8 @@ from typing import TYPE_CHECKING
 
 import xxtea
 from bleak import BleakClient, BleakScanner
-from bleak.exc import BleakError
-from bleak_retry_connector import (
-    BleakClientWithServiceCache,
-    close_stale_connections_by_address,
-    establish_connection,
-)
+from bleak.exc import BleakDBusError, BleakError
+from bleak_retry_connector import close_stale_connections_by_address
 
 if TYPE_CHECKING:
     from bleak.backends.bluezdbus.client import BleakClientBlueZDBus
@@ -58,8 +55,17 @@ MIN_TEMP_C = 10.0
 MAX_TEMP_C = 40.0
 TEMP_STEP = 0.5
 POLL_INTERVAL_SECS = 30
-DEFAULT_CONNECT_TIMEOUT = 90.0
-DEFAULT_GATT_TIMEOUT = 60.0
+DEFAULT_CONNECT_TIMEOUT = 20.0
+DEFAULT_GATT_TIMEOUT = 10.0
+CONNECT_ATTEMPT_TIMEOUT = 20.0
+CONNECT_RETRY_DELAY = 0.5
+CONNECT_BACKOFF_MAX = 8.0
+CONNECT_BACKOFF_JITTER = 0.35
+CONNECT_REFRESH_DEVICE_EVERY = 12.0
+CONNECT_STALE_CLOSE_EVERY = 8.0
+KEY_RETRIEVE_TIMEOUT = 150.0
+KEY_CONNECT_BUDGET = 140.0
+KEY_GATT_TIMEOUT = 10.0
 
 
 def _is_etrv(name: str | None) -> bool:
@@ -103,76 +109,104 @@ async def _send_pin(client: BleakClient, pin: int) -> None:
     await asyncio.sleep(0.5)
 
 
-async def _resolve_ble_device(address: str) -> object:
-    device = await BleakScanner.find_device_by_address(address, timeout=10.0)
-    if device is None:
-        raise RuntimeError(f"No connectable BLE device found for {address}")
-    return device
-
-
-async def _connect_like_integration(
+async def _connect_bleak(
     address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
 ) -> BleakClient:
-    await close_stale_connections_by_address(address)
-    ble_device = await _resolve_ble_device(address)
+    """Connect with plain BleakClient path (read_secret_key-style)."""
+    # Attempt to clear any stale connection state in BlueZ.
+    # This helps with org.bluez.Error.InProgress and similar stuck states.
     try:
-        async with asyncio.timeout(timeout):
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                address,
-            )
-    except TimeoutError as exc:
-        raise RuntimeError(f"Timeout connecting to {address}") from exc
-    except BleakError as exc:
-        raise RuntimeError(f"Failed to connect to {address}: {exc}") from exc
-    return client
+        await close_stale_connections_by_address(address)
+    except Exception as err:
+        logger.debug("close_stale_connections_by_address(%s) failed: %s", address, err)
 
-
-async def _connect_direct_bleak(
-    address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
-) -> BleakClient:
-    client = BleakClient(address, timeout=timeout)
+    # Prime BlueZ's device object cache once. This reduces how often we hit
+    # intermittent "Device ... was not found" errors on some adapters.
+    ble_device = None
     try:
-        # BlueZ/bleak may support cache reuse with this kwarg, but not all versions do.
+        ble_device = await BleakScanner.find_device_by_address(
+            address, timeout=min(6.0, max(2.0, timeout / 10.0))
+        )
+    except Exception as err:
+        logger.debug("Initial device resolve failed for %s: %s", address, err)
+    last_resolve = time.monotonic()
+    last_stale_close = time.monotonic()
+
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    last_err: Exception | None = None
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        attempt += 1
+        # Fewer, longer attempts are more stable than rapid connect/disconnect loops.
+        per_attempt = min(CONNECT_ATTEMPT_TIMEOUT, remaining)
+        started = time.monotonic()
+
+        # If we get "not found" style errors, refresh discovery occasionally.
+        if ble_device is None and (time.monotonic() - last_resolve) > CONNECT_REFRESH_DEVICE_EVERY:
+            try:
+                ble_device = await BleakScanner.find_device_by_address(
+                    address, timeout=3.0
+                )
+                last_resolve = time.monotonic()
+            except Exception as err:
+                logger.debug("Device re-resolve failed for %s: %s", address, err)
+                last_resolve = time.monotonic()
+
+        client = BleakClient(ble_device or address, timeout=per_attempt)
         try:
-            await client.connect(dangerous_use_bleak_cache=True)
-        except TypeError as err:
-            if "dangerous_use_bleak_cache" not in str(err):
-                raise
-            await client.connect()
-    except Exception:
-        if client.is_connected:
-            await client.disconnect()
-        raise
-    return client
+            # Keep this equivalent to scripts/read_secret_key.py behavior.
+            # NOTE: On Linux/BlueZ this ultimately maps to org.bluez.Device1.Connect.
+            # We pass timeout explicitly so the backend doesn't pick a shorter default.
+            await client.connect(timeout=per_attempt)
+            logger.debug(
+                "Connected to %s on attempt %d in %.2fs",
+                address,
+                attempt,
+                time.monotonic() - started,
+            )
+            return client
+        except Exception as err:
+            last_err = err
+            logger.debug(
+                "Connect attempt %d failed after %.2fs: %s",
+                attempt,
+                time.monotonic() - started,
+                err,
+            )
+            if isinstance(err, BleakDBusError) and "InProgress" in str(err):
+                logger.debug("BlueZ connect still in progress; backing off before retry")
+            err_s = str(err).lower()
+            if "not found" in err_s:
+                ble_device = None
+                last_resolve = 0.0
+            if ("inprogress" in err_s or "in progress" in err_s or "org.bluez.error.failed" in err_s) and (
+                time.monotonic() - last_stale_close
+            ) > CONNECT_STALE_CLOSE_EVERY:
+                # Clear stuck connection state occasionally during retries.
+                try:
+                    await close_stale_connections_by_address(address)
+                    last_stale_close = time.monotonic()
+                except Exception as stale_err:
+                    logger.debug("stale close failed during retry: %s", stale_err)
+            if client.is_connected:
+                await client.disconnect()
 
+            # Exponential backoff with jitter reduces discovery/connect thrash in BlueZ.
+            backoff = min(CONNECT_BACKOFF_MAX, CONNECT_RETRY_DELAY * (2 ** max(0, attempt - 1)))
+            backoff += random.uniform(0.0, backoff * CONNECT_BACKOFF_JITTER)
+            sleep_for = min(backoff, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
 
-async def _connect_with_fallback(
-    address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
-) -> BleakClient:
-    started = time.monotonic()
-    try:
-        client = await _connect_like_integration(address, timeout=timeout)
-        logger.debug(
-            "Connected via integration transport in %.2fs",
-            time.monotonic() - started,
-        )
-        return client
-    except Exception as integration_err:
-        logger.warning(
-            "Integration transport failed after %.2fs: %s; falling back to direct bleak",
-            time.monotonic() - started,
-            integration_err,
-        )
-
-    direct_started = time.monotonic()
-    client = await _connect_direct_bleak(address, timeout=timeout)
-    logger.debug(
-        "Connected via direct bleak in %.2fs",
-        time.monotonic() - direct_started,
+    raise RuntimeError(
+        f"Failed to connect to {address} within {timeout:.1f}s after "
+        f"{attempt} attempt(s): {last_err}"
     )
-    return client
 
 
 async def _read_gatt_char_with_timeout(
@@ -256,40 +290,41 @@ async def scan(timeout: float, show_all: bool) -> None:
 
 async def _get_secret_key_value(address: str, pin: int = 0) -> str:
     """Read secret key from device. Device must be in pairing mode (timer button pressed)."""
-    logger.debug("Connecting to %s", address)
-
-    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
+    logger.debug("Reading key from %s with %.1fs budget", address, KEY_RETRIEVE_TIMEOUT)
+    client: BleakClient | None = None
     try:
-        logger.debug("Connected to %s", address)
-
-        logger.debug("Writing PIN to %s", address)
-        pin_bytes = int(pin).to_bytes(4, byteorder="big", signed=False)
-        await client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
-        logger.debug("PIN written to %s", address)
-        await asyncio.sleep(0.5)
-
-        logger.debug("Reading secret key from %s", address)
-        try:
+        async with asyncio.timeout(KEY_RETRIEVE_TIMEOUT):
+            client = await _connect_bleak(address, timeout=KEY_CONNECT_BUDGET)
+            logger.debug("Connected to %s", address)
+            await _send_pin(client, pin)
+            logger.debug("PIN written to %s", address)
             data = await _read_gatt_char(
-                client, UUID_SECRET_KEY, timeout=DEFAULT_GATT_TIMEOUT
+                client, UUID_SECRET_KEY, timeout=KEY_GATT_TIMEOUT
             )
-        except Exception as e:
-            logger.error("Failed to read secret key from %s: %s", address, e)
-            raise RuntimeError(
-                f"Failed to read secret key: {e}. "
-                "Make sure the timer button was pressed to enter pairing mode."
-            ) from e
-        
-        logger.debug("Secret key read from %s", address)
-        return bytes(data)[:16].hex()
+            logger.debug("Secret key read from %s", address)
+            return bytes(data)[:16].hex()
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Key retrieval exceeded {KEY_RETRIEVE_TIMEOUT:.0f}s. Ensure pairing mode is active, "
+            "device is close, and no other process is connected."
+        ) from exc
+    except Exception as e:
+        logger.error("Failed to read secret key from %s: %s", address, e)
+        raise RuntimeError(
+            f"Failed to read secret key: {e}. "
+            "Make sure the timer button was pressed to enter pairing mode."
+        ) from e
     finally:
-        if client.is_connected:
+        if client and client.is_connected:
             await client.disconnect()
 
 
-async def get_secret_key(address: str, pin: int = 0) -> None:
-    print("Push the timer button on the thermostat, then press Enter...")
-    input()
+async def get_secret_key(
+    address: str, pin: int = 0, wait_for_enter: bool = True
+) -> None:
+    if wait_for_enter:
+        print("Push the timer button on the thermostat, then press Enter...")
+        input()
     print(await _get_secret_key_value(address, pin))
 
 
@@ -300,7 +335,7 @@ async def _read_info_data(
     skip_battery: bool,
 ) -> dict[str, object]:
     key = bytes.fromhex(secret_key)
-    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
+    client = await _connect_bleak(address, timeout=DEFAULT_CONNECT_TIMEOUT)
     try:
         await _send_pin(client, pin)
 
@@ -357,7 +392,7 @@ async def _set_temperature_value(
     key = bytes.fromhex(secret_key)
     bounded = max(MIN_TEMP_C, min(MAX_TEMP_C, temperature))
 
-    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
+    client = await _connect_bleak(address, timeout=DEFAULT_CONNECT_TIMEOUT)
     try:
         await _send_pin(client, pin)
         temp_raw = await _read_gatt_char(
@@ -1006,6 +1041,11 @@ def _parse_args() -> argparse.Namespace:
     key_parser = subparsers.add_parser("get-key", help="Read secret key (push timer button first).")
     key_parser.add_argument("address")
     key_parser.add_argument("--pin", type=int, default=0, help="PIN code (default: 0000)")
+    key_parser.add_argument(
+        "--no-wait-for-enter",
+        action="store_true",
+        help="Skip interactive Enter prompt before attempting key read.",
+    )
 
     info_parser = subparsers.add_parser("info", help="Read battery/temp/name.")
     info_parser.add_argument("address")
@@ -1040,7 +1080,13 @@ def main() -> None:
     elif args.command == "scan":
         asyncio.run(scan(args.timeout, args.all))
     elif args.command == "get-key":
-        asyncio.run(get_secret_key(args.address, args.pin))
+        asyncio.run(
+            get_secret_key(
+                args.address,
+                args.pin,
+                wait_for_enter=not args.no_wait_for_enter,
+            )
+        )
     elif args.command == "info":
         asyncio.run(
             read_info(
