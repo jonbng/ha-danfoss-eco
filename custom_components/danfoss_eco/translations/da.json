@@ -37,7 +37,8 @@
           "stay_connected": "Forbliv tilsluttet mellem forespørgsler",
           "report_room_temperature": "Rapportér rumtemperatursensor",
           "setpoint_debounce": "Setpunkt-forsinkelse (sekunder)",
-          "pin": "PIN (standard 0000)"
+          "pin": "PIN (standard 0000)",
+          "secret_key": "Hemmelig nøgle"
         }
       }
     }

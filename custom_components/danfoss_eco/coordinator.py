@@ -47,7 +47,7 @@ class EtrvCoordinator(DataUpdateCoordinator[dict[str, object]]):
         self._client = EtrvBleClient(
             hass,
             entry.unique_id or entry.data["address"],
-            entry.data.get(CONF_SECRET_KEY),
+            options.get(CONF_SECRET_KEY, entry.data.get(CONF_SECRET_KEY)),
             options.get(CONF_PIN, entry.data.get(CONF_PIN, DEFAULT_PIN)),
             options.get(CONF_STAY_CONNECTED, DEFAULT_STAY_CONNECTED),
         )

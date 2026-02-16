@@ -37,7 +37,8 @@
           "stay_connected": "Pysy yhteydessä kyselyjen välillä",
           "report_room_temperature": "Raportoi huonelämpötila-anturi",
           "setpoint_debounce": "Asetuspisteen viive (sekuntia)",
-          "pin": "PIN (oletus 0000)"
+          "pin": "PIN (oletus 0000)",
+          "secret_key": "Salainen avain"
         }
       }
     }

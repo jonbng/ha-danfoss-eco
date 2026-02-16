@@ -37,7 +37,8 @@
           "stay_connected": "Stay connected between polls",
           "report_room_temperature": "Report room temperature sensor",
           "setpoint_debounce": "Setpoint debounce (seconds)",
-          "pin": "PIN (default 0000)"
+          "pin": "PIN (default 0000)",
+          "secret_key": "Secret key"
         }
       }
     }

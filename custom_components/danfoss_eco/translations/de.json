@@ -37,7 +37,8 @@
           "stay_connected": "Zwischen Abfragen verbunden bleiben",
           "report_room_temperature": "Raumtemperatursensor melden",
           "setpoint_debounce": "Sollwert-Entprellzeit (Sekunden)",
-          "pin": "PIN (Standard 0000)"
+          "pin": "PIN (Standard 0000)",
+          "secret_key": "Geheimer Schlüssel"
         }
       }
     }

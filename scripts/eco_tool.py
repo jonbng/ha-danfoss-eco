@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING
 
 import xxtea
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakError
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    close_stale_connections_by_address,
+    establish_connection,
+)
 
 if TYPE_CHECKING:
     from bleak.backends.bluezdbus.client import BleakClientBlueZDBus
@@ -52,6 +58,8 @@ MIN_TEMP_C = 10.0
 MAX_TEMP_C = 40.0
 TEMP_STEP = 0.5
 POLL_INTERVAL_SECS = 30
+DEFAULT_CONNECT_TIMEOUT = 90.0
+DEFAULT_GATT_TIMEOUT = 60.0
 
 
 def _is_etrv(name: str | None) -> bool:
@@ -92,24 +100,110 @@ def _from_temperature(value: float) -> int:
 async def _send_pin(client: BleakClient, pin: int) -> None:
     pin_bytes = int(pin).to_bytes(4, byteorder="big", signed=False)
     await client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.5)
 
 
-async def _read_gatt_char(client: BleakClient, char_uuid: str) -> bytes:
+async def _resolve_ble_device(address: str) -> object:
+    device = await BleakScanner.find_device_by_address(address, timeout=10.0)
+    if device is None:
+        raise RuntimeError(f"No connectable BLE device found for {address}")
+    return device
+
+
+async def _connect_like_integration(
+    address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
+) -> BleakClient:
+    await close_stale_connections_by_address(address)
+    ble_device = await _resolve_ble_device(address)
+    try:
+        async with asyncio.timeout(timeout):
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                address,
+            )
+    except TimeoutError as exc:
+        raise RuntimeError(f"Timeout connecting to {address}") from exc
+    except BleakError as exc:
+        raise RuntimeError(f"Failed to connect to {address}: {exc}") from exc
+    return client
+
+
+async def _connect_direct_bleak(
+    address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
+) -> BleakClient:
+    client = BleakClient(address, timeout=timeout)
+    try:
+        # BlueZ/bleak may support cache reuse with this kwarg, but not all versions do.
+        try:
+            await client.connect(dangerous_use_bleak_cache=True)
+        except TypeError as err:
+            if "dangerous_use_bleak_cache" not in str(err):
+                raise
+            await client.connect()
+    except Exception:
+        if client.is_connected:
+            await client.disconnect()
+        raise
+    return client
+
+
+async def _connect_with_fallback(
+    address: str, timeout: float = DEFAULT_CONNECT_TIMEOUT
+) -> BleakClient:
+    started = time.monotonic()
+    try:
+        client = await _connect_like_integration(address, timeout=timeout)
+        logger.debug(
+            "Connected via integration transport in %.2fs",
+            time.monotonic() - started,
+        )
+        return client
+    except Exception as integration_err:
+        logger.warning(
+            "Integration transport failed after %.2fs: %s; falling back to direct bleak",
+            time.monotonic() - started,
+            integration_err,
+        )
+
+    direct_started = time.monotonic()
+    client = await _connect_direct_bleak(address, timeout=timeout)
+    logger.debug(
+        "Connected via direct bleak in %.2fs",
+        time.monotonic() - direct_started,
+    )
+    return client
+
+
+async def _read_gatt_char_with_timeout(
+    client: BleakClient, char_specifier: int | str, timeout: float
+) -> bytes:
+    try:
+        return bytes(await client.read_gatt_char(char_specifier, timeout=timeout))
+    except TypeError as err:
+        if "timeout" in str(err):
+            logger.debug(
+                "timeout kwarg unsupported by bleak backend, using default timeout"
+            )
+            return bytes(await client.read_gatt_char(char_specifier))
+        raise
+
+
+async def _read_gatt_char(
+    client: BleakClient, char_uuid: str, timeout: float = DEFAULT_GATT_TIMEOUT
+) -> bytes:
     """Read a GATT characteristic, trying handle first then UUID fallback."""
-    from bleak.exc import BleakError
     handle = HANDLE_MAP.get(char_uuid)
     if handle is not None:
         try:
-            return bytes(await client.read_gatt_char(handle))
+            return await _read_gatt_char_with_timeout(client, handle, timeout)
         except BleakError:
             logger.debug("Handle 0x%02X failed, falling back to UUID", handle)
-    return bytes(await client.read_gatt_char(char_uuid))
+    return await _read_gatt_char_with_timeout(client, char_uuid, timeout)
 
 
 async def _write_gatt_char(client: BleakClient, char_uuid: str, data: bytes) -> None:
     """Write to a GATT characteristic, trying handle first then UUID fallback."""
-    from bleak.exc import BleakError
     handle = HANDLE_MAP.get(char_uuid)
     if handle is not None:
         try:
@@ -163,25 +257,21 @@ async def scan(timeout: float, show_all: bool) -> None:
 async def _get_secret_key_value(address: str, pin: int = 0) -> str:
     """Read secret key from device. Device must be in pairing mode (timer button pressed)."""
     logger.debug("Connecting to %s", address)
-    
-    client = BleakClient(address, timeout=90.0)
+
+    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
     try:
-        logger.debug("Attempting connection with dangerous_use_bleak_cache=True")
-        await client.connect(dangerous_use_bleak_cache=True)
         logger.debug("Connected to %s", address)
-        
-        logger.debug("Services: %s", [str(s.uuid) for s in client.services])
-        
+
         logger.debug("Writing PIN to %s", address)
         pin_bytes = int(pin).to_bytes(4, byteorder="big", signed=False)
         await client.write_gatt_char(UUID_PIN, pin_bytes, response=True)
         logger.debug("PIN written to %s", address)
-        await asyncio.sleep(0.2)
-        
+        await asyncio.sleep(0.5)
+
         logger.debug("Reading secret key from %s", address)
         try:
-            data = await asyncio.wait_for(
-                _read_gatt_char(client, UUID_SECRET_KEY), timeout=10.0
+            data = await _read_gatt_char(
+                client, UUID_SECRET_KEY, timeout=DEFAULT_GATT_TIMEOUT
             )
         except Exception as e:
             logger.error("Failed to read secret key from %s: %s", address, e)
@@ -210,20 +300,24 @@ async def _read_info_data(
     skip_battery: bool,
 ) -> dict[str, object]:
     key = bytes.fromhex(secret_key)
-    async with BleakClient(address, timeout=90.0) as client:
+    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
+    try:
         await _send_pin(client, pin)
 
-        temp_raw = await asyncio.wait_for(
-            _read_gatt_char(client, UUID_TEMPERATURE), timeout=10.0
+        temp_raw = await _read_gatt_char(
+            client, UUID_TEMPERATURE, timeout=DEFAULT_GATT_TIMEOUT
         )
-        name_raw = await asyncio.wait_for(
-            _read_gatt_char(client, UUID_NAME), timeout=10.0
+        name_raw = await _read_gatt_char(
+            client, UUID_NAME, timeout=DEFAULT_GATT_TIMEOUT
         )
         battery_raw = None
         if not skip_battery:
-            battery_raw = await asyncio.wait_for(
-                _read_gatt_char(client, UUID_BATTERY), timeout=10.0
+            battery_raw = await _read_gatt_char(
+                client, UUID_BATTERY, timeout=DEFAULT_GATT_TIMEOUT
             )
+    finally:
+        if client.is_connected:
+            await client.disconnect()
 
     temp_decoded = etrv_decode(bytes(temp_raw), key)
     name_decoded = etrv_decode(bytes(name_raw), key)
@@ -263,19 +357,20 @@ async def _set_temperature_value(
     key = bytes.fromhex(secret_key)
     bounded = max(MIN_TEMP_C, min(MAX_TEMP_C, temperature))
 
-    async with BleakClient(address, timeout=90.0) as client:
+    client = await _connect_with_fallback(address, timeout=DEFAULT_CONNECT_TIMEOUT)
+    try:
         await _send_pin(client, pin)
-        temp_raw = await asyncio.wait_for(
-            _read_gatt_char(client, UUID_TEMPERATURE), timeout=10.0
+        temp_raw = await _read_gatt_char(
+            client, UUID_TEMPERATURE, timeout=DEFAULT_GATT_TIMEOUT
         )
         decoded = etrv_decode(bytes(temp_raw), key)
         raw = bytearray(decoded)
         raw[0] = _from_temperature(bounded)
         payload = etrv_encode(bytes(raw), key)
-        await asyncio.wait_for(
-            _write_gatt_char(client, UUID_TEMPERATURE, payload),
-            timeout=10.0,
-        )
+        await _write_gatt_char(client, UUID_TEMPERATURE, payload)
+    finally:
+        if client.is_connected:
+            await client.disconnect()
     return bounded
 
 

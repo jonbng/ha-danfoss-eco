@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -31,6 +32,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_SECRET_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
 def _matches_etrv(service_info: bluetooth.BluetoothServiceInfoBleak) -> bool:
@@ -194,6 +196,8 @@ class DanfossEcoOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         if user_input is not None:
+            # Normalize casing to avoid accidental invalid values downstream.
+            user_input[CONF_SECRET_KEY] = user_input[CONF_SECRET_KEY].lower()
             return self.async_create_entry(title="", data=user_input)
 
         options = self._entry.options
@@ -223,6 +227,12 @@ class DanfossEcoOptionsFlow(config_entries.OptionsFlow):
                     CONF_PIN,
                     default=options.get(CONF_PIN, self._entry.data.get(CONF_PIN, DEFAULT_PIN)),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=9999)),
+                vol.Required(
+                    CONF_SECRET_KEY,
+                    default=options.get(
+                        CONF_SECRET_KEY, self._entry.data.get(CONF_SECRET_KEY, "")
+                    ),
+                ): vol.All(str, vol.Match(_SECRET_KEY_PATTERN)),
             }
         )
 
